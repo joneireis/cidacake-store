@@ -1,70 +1,40 @@
-# Getting Started with Create React App
+# Cidacake Store
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+Cidacake Store é um site web3.0 descentralizado que permite aos usuários comprar bolos na rede Solana. O projeto utiliza autenticação via carteira Solana (Phantom), consulta de estoque on-chain, e transações para compras diretamente na blockchain. O frontend é construído com React e hospedado no IPFS para garantir descentralização.
 
-## Available Scripts
+## Descrição
 
-In the project directory, you can run:
+Cidacake Store é uma aplicação de e-commerce descentralizada onde os usuários podem:
+- Conectar sua carteira Solana (ex.: Phantom) para autenticação.
+- Consultar o estoque de bolos disponível na blockchain.
+- Comprar bolos pagando com SOL ou tokens SPL, com transações processadas on-chain.
 
-### `npm start`
+O projeto é implantado na devnet da Solana e utiliza o programa Solana `cidacake-program` para gerenciar o estoque e processar compras.
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+## Arquitetura
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+A arquitetura do Cidacake Store segue os princípios da web3.0, com os seguintes componentes:
 
-### `npm test`
+- **Hospedagem Descentralizada**: O frontend é hospedado no IPFS para garantir resistência a censura e falhas.
+- **Frontend**: Construído com React, utilizando a biblioteca `@solana/web3.js` para interagir com a blockchain Solana.
+- **Autenticação**: Autenticação baseada em carteira Solana (Phantom), onde a chave pública do usuário serve como identificador.
+- **Lógica na Blockchain**: O programa Solana `cidacake-program` (ID: `nY3F2GFxvit5n6g1Ar6drGgSNcFYzwgixpcUxC9p722`) gerencia o estoque e processa transações.
+- **Pagamentos**: Transações on-chain usando SOL ou tokens SPL, garantindo transparência e segurança.
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+### Endereços Importantes
+- **Programa Solana**: `nY3F2GFxvit5n6g1Ar6drGgSNcFYzwgixpcUxC9p722`
+- **Conta de Estoque (CAKE_ACCOUNT)**: `7m2eHqRfyLymQn17f4bTxyE2uNu9h39wpEv5QvX9Tyg1`
+- **Conta do Proprietário (OWNER_PUBKEY)**: `5ufohBPKyzfn8ZSFSGpuYJxgduwgkkgg4YrBwdY7JLKW`
 
-### `npm run build`
+## Pré-requisitos
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+- **Node.js**: Versão 18.x (recomendado). Use `nvm` para gerenciar versões do Node.js.
+- **Carteira Solana**: Instale a extensão Phantom no seu navegador ([Phantom Wallet](https://phantom.app/)).
+- **IPFS**: Para hospedagem descentralizada (opcional, se você quiser hospedar localmente).
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+## Instalação
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
-
-### `npm run eject`
-
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
-
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
-
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
-
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
-
-## Learn More
-
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
-
-To learn React, check out the [React documentation](https://reactjs.org/).
-
-### Code Splitting
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
-
-### Analyzing the Bundle Size
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
-
-### Making a Progressive Web App
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
-
-### Advanced Configuration
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
-
-### Deployment
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
-
-### `npm run build` fails to minify
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+1. **Clone o Repositório** (se aplicável):
+   ```bash
+   git clone <URL_DO_REPOSITORIO>
+   cd cidacake-store
