@@ -1,40 +1,35 @@
 # Cidacake Store
 
-Cidacake Store é um site web3.0 descentralizado que permite aos usuários comprar bolos na rede Solana. O projeto utiliza autenticação via carteira Solana (Phantom), consulta de estoque on-chain, e transações para compras diretamente na blockchain. O frontend é construído com React e hospedado no IPFS para garantir descentralização.
+Bem-vindo ao **Cidacake Store**, uma aplicação descentralizada (dApp) construída na blockchain Solana para compra e gerenciamento de bolos virtuais. Este projeto interage com o programa Solana `cidacake-program` e permite aos usuários conectar suas carteiras, comprar bolos, consultar o estoque, atualizar o estoque e o preço, e visualizar informações detalhadas do contrato.
 
-## Descrição
+![alt text](image.png)
 
-Cidacake Store é uma aplicação de e-commerce descentralizada onde os usuários podem:
-- Conectar sua carteira Solana (ex.: Phantom) para autenticação.
-- Consultar o estoque de bolos disponível na blockchain.
-- Comprar bolos pagando com SOL ou tokens SPL, com transações processadas on-chain.
+## Funcionalidades
 
-O projeto é implantado na devnet da Solana e utiliza o programa Solana `cidacake-program` para gerenciar o estoque e processar compras.
-
-## Arquitetura
-
-A arquitetura do Cidacake Store segue os princípios da web3.0, com os seguintes componentes:
-
-- **Hospedagem Descentralizada**: O frontend é hospedado no IPFS para garantir resistência a censura e falhas.
-- **Frontend**: Construído com React, utilizando a biblioteca `@solana/web3.js` para interagir com a blockchain Solana.
-- **Autenticação**: Autenticação baseada em carteira Solana (Phantom), onde a chave pública do usuário serve como identificador.
-- **Lógica na Blockchain**: O programa Solana `cidacake-program` (ID: `nY3F2GFxvit5n6g1Ar6drGgSNcFYzwgixpcUxC9p722`) gerencia o estoque e processa transações.
-- **Pagamentos**: Transações on-chain usando SOL ou tokens SPL, garantindo transparência e segurança.
-
-### Endereços Importantes
-- **Programa Solana**: `nY3F2GFxvit5n6g1Ar6drGgSNcFYzwgixpcUxC9p722`
-- **Conta de Estoque (CAKE_ACCOUNT)**: `7m2eHqRfyLymQn17f4bTxyE2uNu9h39wpEv5QvX9Tyg1`
-- **Conta do Proprietário (OWNER_PUBKEY)**: `5ufohBPKyzfn8ZSFSGpuYJxgduwgkkgg4YrBwdY7JLKW`
+- **Conexão com Carteira**: Conecte-se automaticamente à carteira Phantom (suporte para outras carteiras como MetaMask e SafePal foi removido para simplificação).
+- **Menu de Ações**: Após o login, um menu de ações é exibido com as seguintes opções:
+  - **Compra de Bolos**: Permite comprar bolos virtuais usando a instrução `sell` (ID 3) do programa `cidacake-program`.
+  - **Saldo do Estoque**: Consulta o saldo atual do estoque e o preço por bolo, deserializando a estrutura `CakeState` (stock, price, owner) da conta `CAKE_ACCOUNT`.
+  - **Atualizar Estoque e Preço**:
+    - **Atualizar Estoque**: Inicializa ou realoca a conta `CAKE_ACCOUNT` com a instrução `initialize` (ID 0).
+    - **Atualizar Preço**: Atualiza o preço por bolo usando a instrução `update_price` (ID 2).
+  - **Informações do Contrato**: Exibe informações detalhadas do contrato, incluindo:
+    - Programa: ID do programa, saldo em SOL, e se é executável.
+    - Conta de Estoque: Endereço, saldo em SOL, espaço alocado, época de aluguel, e se é executável.
+    - Proprietário: Endereço e saldo em SOL.
+    - Conta de Pagamentos: Endereço, saldo em SOL, e se é uma conta de token SPL (com detalhes adicionais se aplicável).
+  - **Desconectar da Carteira**: Desconecta a carteira e limpa o estado da aplicação.
+- **Estilização Melhorada**: A interface foi estilizada com um design moderno, incluindo tabelas organizadas, seções agrupadas, e botões com efeitos de hover.
 
 ## Pré-requisitos
 
-- **Node.js**: Versão 18.x (recomendado). Use `nvm` para gerenciar versões do Node.js.
-- **Carteira Solana**: Instale a extensão Phantom no seu navegador ([Phantom Wallet](https://phantom.app/)).
-- **IPFS**: Para hospedagem descentralizada (opcional, se você quiser hospedar localmente).
+- **Node.js** e **npm**: Certifique-se de ter o Node.js instalado (versão recomendada: 16.x ou superior).
+- **Carteira Phantom**: Instale a extensão Phantom no seu navegador para interagir com a Solana devnet.
+- **IPFS** (opcional): Para hospedar a aplicação de forma descentralizada.
 
 ## Instalação
 
-1. **Clone o Repositório** (se aplicável):
+1. **Clone o Repositório**:
    ```bash
    git clone <URL_DO_REPOSITORIO>
    cd cidacake-store
