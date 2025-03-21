@@ -1,47 +1,49 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { PublicKey, Connection, TransactionInstruction, Transaction, SystemProgram, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { TOKEN_PROGRAM_ID, getAccount } from '@solana/spl-token';
-import { Buffer } from 'buffer'; // Importar o Buffer
 import './App.css';
 
 const PROGRAM_ID = new PublicKey('nY3F2GFxvit5n6g1Ar6drGgSNcFYzwgixpcUxC9p722');
 const CONNECTION = new Connection('https://api.devnet.solana.com', 'confirmed');
-const OWNER_PUBKEY = new PublicKey('5ufohBPKyzfn8ZSFSGpuYJxgduwgkkgg4YrBwdY7JLKW');
-const CAKE_ACCOUNT = new PublicKey('7m2eHqRfyLymQn17f4bTxyE2uNu9h39wpEv5QvX9Tyg1');
-const OWNER_TOKEN_ACCOUNT = new PublicKey('5ufohBPKyzfn8ZSFSGpuYJxgduwgkkgg4YrBwdY7JLKW');
+const OWNER_PUBKEY = new PublicKey('yG9KfVSMZaMZHSY48KKxpvtdPZhbAMUsYsAfKZDUkW5');
+const CAKE_ACCOUNT = new PublicKey('DBNGpwu4dcTvF8F6ogie2dxhpY4QeEkTVqe6p8xFtqbj');
+const OWNER_TOKEN_ACCOUNT = new PublicKey('4YbgNnchNjJtXj62wMHfvogB6BU6Vbye947CZxfB9SrG');
 
 function App() {
   const [walletAddress, setWalletAddress] = useState(null);
-  const [amount, setAmount] = useState('');
+  const [amounts, setAmounts] = useState({});
   const [newPrice, setNewPrice] = useState('');
   const [status, setStatus] = useState('');
-  const [stock, setStock] = useState(null);
-  const [price, setPrice] = useState(null);
   const [walletProvider, setWalletProvider] = useState(null);
   const [contractInfo, setContractInfo] = useState(null);
   const [showContractInfo, setShowContractInfo] = useState(false);
   const [activeMenu, setActiveMenu] = useState(null);
+  const [products, setProducts] = useState([]);
+  const [purchaseHistory, setPurchaseHistory] = useState(() => {
+    const savedHistory = localStorage.getItem('purchaseHistory');
+    return savedHistory ? JSON.parse(savedHistory) : [];
+  });
+  const [isAccountInitialized, setIsAccountInitialized] = useState(false);
+  const [copyMessage, setCopyMessage] = useState(''); // Estado para mensagem de cópia
+
+  useEffect(() => {
+    localStorage.setItem('purchaseHistory', JSON.stringify(purchaseHistory));
+  }, [purchaseHistory]);
 
   const connectWallet = async () => {
     try {
       console.log('Tentando conectar à carteira...');
-      let provider;
-
-      // Priorizar o Phantom (Solana)
-      provider = window.solana;
+      let provider = window.solana;
       if (!provider || !provider.isPhantom) {
         throw new Error('Por favor, instale a carteira Phantom!');
       }
-      // Forçar uma nova conexão
       await provider.connect({ onlyIfTrusted: false });
       const pubkey = provider.publicKey.toString();
       console.log('Carteira conectada:', pubkey);
       setWalletAddress(pubkey);
       setWalletProvider(provider);
       setStatus(`Carteira conectada: ${pubkey}`);
-
-      // Consultar o estoque após conectar a carteira
-      await fetchStock();
+      await checkAccountStatus();
     } catch (error) {
       console.error('Erro ao conectar à carteira:', error);
       setStatus(`Erro: ${error.message}`);
@@ -56,11 +58,11 @@ function App() {
       }
       setWalletAddress(null);
       setWalletProvider(null);
-      setStock(null);
-      setPrice(null);
       setContractInfo(null);
       setShowContractInfo(false);
       setActiveMenu(null);
+      setProducts([]);
+      setIsAccountInitialized(false);
       setStatus('Carteira desconectada com sucesso!');
     } catch (error) {
       console.error('Erro ao desconectar carteira:', error);
@@ -68,125 +70,46 @@ function App() {
     }
   };
 
-  const initializeStock = async () => {
+  const checkAccountStatus = async () => {
     try {
-      setStatus('Inicializando estoque...');
-
-      // Criar uma transação para inicializar a conta
-      const transaction = new Transaction();
-
-      // Verificar se a conta CAKE_ACCOUNT já existe e alocar espaço, se necessário
+      console.log('Verificando o status da CAKE_ACCOUNT:', CAKE_ACCOUNT.toString());
       const accountInfo = await CONNECTION.getAccountInfo(CAKE_ACCOUNT);
+      console.log('AccountInfo:', accountInfo);
       if (!accountInfo) {
-        // Se a conta não existe, criá-la
-        const space = 48; // Tamanho da CakeState (8 + 8 + 32 = 48 bytes)
-        const lamports = await CONNECTION.getMinimumBalanceForRentExemption(space);
-        const createAccountInstruction = SystemProgram.createAccount({
-          fromPubkey: new PublicKey(walletAddress),
-          newAccountPubkey: CAKE_ACCOUNT,
-          lamports: lamports,
-          space: space,
-          programId: PROGRAM_ID,
-        });
-        transaction.add(createAccountInstruction);
-      } else if (accountInfo.space < 48) {
-        // Se a conta existe, mas o espaço é insuficiente, realocar
-        const space = 48; // Tamanho da CakeState
-        const lamports = await CONNECTION.getMinimumBalanceForRentExemption(space);
-        const allocateInstruction = SystemProgram.allocate({
-          accountPubkey: CAKE_ACCOUNT,
-          space: space,
-        });
-        transaction.add(allocateInstruction);
+        console.log('Conta CAKE_ACCOUNT não existe.');
+        setStatus('Conta CAKE_ACCOUNT não existe. Por favor, inicialize-a via Solana CLI.');
+        setIsAccountInitialized(false);
+        return;
       }
-
-      // Instrução: Inicializar a conta (ID 0)
-      const initializeInstruction = new TransactionInstruction({
-        programId: PROGRAM_ID,
-        keys: [
-          { pubkey: OWNER_PUBKEY, isSigner: false, isWritable: true },
-          { pubkey: CAKE_ACCOUNT, isSigner: false, isWritable: true },
-          { pubkey: new PublicKey(walletAddress), isSigner: true, isWritable: false },
-        ],
-        data: Buffer.from([0]), // Instrução "initialize" (ID 0)
-      });
-      transaction.add(initializeInstruction);
-
-      // Configurar a transação
-      transaction.recentBlockhash = (await CONNECTION.getLatestBlockhash()).blockhash;
-      transaction.feePayer = new PublicKey(walletAddress);
-
-      // Logar a transação antes de enviar
-      console.log('Transação de inicialização:', transaction);
-
-      // Assinar e enviar a transação
-      const signedTx = await walletProvider.signTransaction(transaction);
-      const txId = await CONNECTION.sendRawTransaction(signedTx.serialize());
-      await CONNECTION.confirmTransaction(txId);
-      console.log('Conta inicializada, txId:', txId);
-      setStatus(`Conta inicializada com sucesso! Tx: ${txId}`);
-
-      // Verificar os dados da conta após a inicialização
-      const updatedAccountInfo = await CONNECTION.getAccountInfo(CAKE_ACCOUNT);
-      if (!updatedAccountInfo || !updatedAccountInfo.data) {
-        console.log('Após inicialização - Dados da conta CAKE_ACCOUNT: vazia');
-      } else {
-        console.log('Após inicialização - Dados da conta CAKE_ACCOUNT:', updatedAccountInfo.data);
-        console.log('Após inicialização - Tamanho do Buffer:', updatedAccountInfo.data.length);
-        console.log('Após inicialização - Dados em Hex:', updatedAccountInfo.data.toString('hex'));
+      console.log('Owner da conta:', accountInfo.owner.toString(), 'PROGRAM_ID esperado:', PROGRAM_ID.toString());
+      if (accountInfo.owner.toString() !== PROGRAM_ID.toString()) {
+        console.log('Conta CAKE_ACCOUNT não pertence ao programa correto.');
+        setStatus('Conta CAKE_ACCOUNT não pertence ao programa correto. Por favor, inicialize-a novamente via Solana CLI.');
+        setIsAccountInitialized(false);
+        return;
       }
-
-      // Consultar o estoque após inicializar
-      await fetchStock();
-    } catch (error) {
-      console.error('Erro ao inicializar estoque:', error);
-      setStatus(`Erro ao inicializar estoque: ${error.message}`);
-    }
-  };
-
-  const fetchStock = async () => {
-    try {
-      setStatus('Consultando estoque...');
-      // Obter os dados da conta CAKE_ACCOUNT diretamente
-      const accountInfo = await CONNECTION.getAccountInfo(CAKE_ACCOUNT);
-      console.log('Account Info:', accountInfo);
-      if (!accountInfo || !accountInfo.data) {
-        throw new Error('Não foi possível obter os dados da conta de estoque. A conta pode não estar inicializada.');
-      }
-
-      // Logar os dados da conta para inspeção
-      console.log('Dados da conta CAKE_ACCOUNT:', accountInfo.data);
-      console.log('Tamanho do Buffer:', accountInfo.data.length);
-      console.log('Dados em Hex:', accountInfo.data.toString('hex'));
-
-      // Verificar se há dados suficientes para ler a estrutura CakeState (48 bytes)
+      console.log('Tamanho dos dados da conta:', accountInfo.data.length);
       if (accountInfo.data.length < 48) {
-        throw new Error('Dados da conta muito curtos para conter a estrutura CakeState (necessita de 48 bytes).');
+        console.log('Dados da conta muito curtos para conter a estrutura CakeState.');
+        setStatus('Conta CAKE_ACCOUNT não está inicializada corretamente (dados insuficientes). Por favor, inicialize-a via Solana CLI.');
+        setIsAccountInitialized(false);
+        return;
       }
-
-      // Deserializar a estrutura CakeState
-      const stockData = accountInfo.data.readBigUInt64LE(0); // stock (u64, 8 bytes)
-      const priceData = accountInfo.data.readBigUInt64LE(8); // price (u64, 8 bytes)
-      const ownerData = new PublicKey(accountInfo.data.slice(16, 48)); // owner (Pubkey, 32 bytes)
-
-      console.log('Stock Data (BigInt):', stockData);
-      console.log('Price Data (BigInt):', priceData);
-      console.log('Owner Data:', ownerData.toString());
-
-      const stockValue = Number(stockData);
-      const priceValue = Number(priceData);
-
-      console.log('Estoque de bolos:', stockValue);
-      console.log('Preço por bolo (lamports):', priceValue);
-
-      setStock(stockValue);
-      setPrice(priceValue);
-      setStatus(`Estoque de bolos: ${stockValue}, Preço por bolo: ${priceValue} lamports`);
+      console.log('Conta CAKE_ACCOUNT está inicializada corretamente.');
+      setIsAccountInitialized(true);
     } catch (error) {
-      console.error('Erro ao consultar estoque:', error);
-      setStatus(`Erro ao consultar estoque: ${error.message}`);
+      console.error('Erro ao verificar o status da conta:', error);
+      setStatus(`Erro ao verificar o status da conta: ${error.message}`);
+      setIsAccountInitialized(false);
     }
   };
+
+  useEffect(() => {
+    if (isAccountInitialized) {
+      console.log('isAccountInitialized mudou para true, chamando fetchProducts...');
+      fetchProducts();
+    }
+  }, [isAccountInitialized]);
 
   const updatePrice = async () => {
     if (!newPrice || newPrice <= 0) {
@@ -196,70 +119,97 @@ function App() {
 
     try {
       setStatus('Atualizando preço...');
-
-      // Criar a transação para atualizar o preço
       const transaction = new Transaction();
-
-      // Instrução: Atualizar o preço (ID 2)
-      const updatePriceData = Buffer.concat([
-        Buffer.from([2]), // Instrução "update_price" (ID 2)
-        Buffer.from(new Uint8Array(new BigUint64Array([BigInt(newPrice)]).buffer)), // Novo preço em lamports
-      ]);
+      const updatePriceData = new Uint8Array(9);
+      updatePriceData[0] = 2; // Instrução "update_price" (ID 2)
+      const priceBytes = new BigUint64Array([BigInt(newPrice)]);
+      updatePriceData.set(new Uint8Array(priceBytes.buffer), 1);
 
       const updatePriceInstruction = new TransactionInstruction({
         programId: PROGRAM_ID,
         keys: [
-          { pubkey: OWNER_PUBKEY, isSigner: false, isWritable: false }, // owner (somente leitura)
-          { pubkey: CAKE_ACCOUNT, isSigner: false, isWritable: true }, // cake_account (gravável)
-          { pubkey: new PublicKey(walletAddress), isSigner: true, isWritable: false }, // signer
+          { pubkey: OWNER_PUBKEY, isSigner: false, isWritable: false },
+          { pubkey: CAKE_ACCOUNT, isSigner: false, isWritable: true },
+          { pubkey: new PublicKey(walletAddress), isSigner: true, isWritable: false },
         ],
         data: updatePriceData,
       });
 
       transaction.add(updatePriceInstruction);
-
-      // Configurar a transação
       transaction.recentBlockhash = (await CONNECTION.getLatestBlockhash()).blockhash;
       transaction.feePayer = new PublicKey(walletAddress);
 
-      // Logar a transação antes de enviar
-      console.log('Transação de atualização de preço:', transaction);
-
-      // Assinar e enviar a transação
       const signedTx = await walletProvider.signTransaction(transaction);
       const txId = await CONNECTION.sendRawTransaction(signedTx.serialize());
       await CONNECTION.confirmTransaction(txId);
       console.log('Preço atualizado, txId:', txId);
       setStatus(`Preço atualizado com sucesso! Tx: ${txId}`);
-
-      // Consultar o estoque e preço após atualizar
-      await fetchStock();
+      await fetchProducts();
     } catch (error) {
       console.error('Erro ao atualizar preço:', error);
       setStatus(`Erro ao atualizar preço: ${error.message}`);
     }
   };
 
+  const fetchProducts = async () => {
+    try {
+      console.log('Iniciando fetchProducts...');
+      setStatus('Consultando produtos...');
+      const accountInfo = await CONNECTION.getAccountInfo(CAKE_ACCOUNT);
+      console.log('AccountInfo em fetchProducts:', accountInfo);
+      if (!accountInfo || !accountInfo.data) {
+        throw new Error('Não foi possível obter os dados da conta de estoque. A conta pode não estar inicializada.');
+      }
+
+      if (accountInfo.owner.toString() !== PROGRAM_ID.toString()) {
+        throw new Error('Conta CAKE_ACCOUNT não pertence ao programa correto.');
+      }
+
+      if (accountInfo.data.length < 48) {
+        throw new Error('Dados da conta muito curtos para conter a estrutura CakeState (necessita de 48 bytes).');
+      }
+
+      const stockData = accountInfo.data.readBigUInt64LE(0);
+      const priceData = accountInfo.data.readBigUInt64LE(8);
+      const ownerData = new PublicKey(accountInfo.data.slice(16, 48));
+
+      const stockValue = Number(stockData);
+      const priceValue = Number(priceData);
+
+      console.log('Estoque total de bolos:', stockValue);
+      console.log('Preço base por bolo (lamports):', priceValue);
+      console.log('Owner:', ownerData.toString());
+
+      const derivedProducts = [
+        { id: 1, name: 'Bolo de Chocolate', price: priceValue, stock: Math.floor(stockValue * 0.5) || 0 },
+        { id: 2, name: 'Bolo de Morango', price: Math.floor(priceValue * 1.2), stock: Math.floor(stockValue * 0.3) || 0 },
+        { id: 3, name: 'Bolo de Baunilha', price: Math.floor(priceValue * 0.8), stock: Math.floor(stockValue * 0.2) || 0 },
+      ];
+
+      console.log('Produtos derivados:', derivedProducts);
+      setProducts(derivedProducts);
+      setStatus(`Produtos carregados: Estoque total ${stockValue} bolos, Preço base ${priceValue} lamports`);
+    } catch (error) {
+      console.error('Erro ao consultar produtos:', error);
+      setStatus(`Erro ao consultar produtos: ${error.message}`);
+    }
+  };
+
   const fetchContractInfo = async () => {
     try {
       setStatus('Obtendo informações do contrato...');
-
-      // Obter informações da conta CAKE_ACCOUNT
       const cakeAccountInfo = await CONNECTION.getAccountInfo(CAKE_ACCOUNT);
       const cakeAccountBalance = cakeAccountInfo ? (cakeAccountInfo.lamports / LAMPORTS_PER_SOL).toFixed(4) : 'N/A';
       const cakeAccountSpace = cakeAccountInfo ? cakeAccountInfo.space : 'N/A';
       const cakeAccountRentEpoch = cakeAccountInfo ? cakeAccountInfo.rentEpoch : 'N/A';
       const cakeAccountExecutable = cakeAccountInfo ? cakeAccountInfo.executable : 'N/A';
 
-      // Obter informações da conta OWNER_PUBKEY
       const ownerAccountInfo = await CONNECTION.getAccountInfo(OWNER_PUBKEY);
-      const ownerAccountBalance = ownerAccountInfo ? (ownerAccountInfo.lamports / LAMPORTS_PER_SOL).toFixed(4) : 'N/A';
+      const ownerAccountBalance = ownerAccountInfo ? (cakeAccountInfo.lamports / LAMPORTS_PER_SOL).toFixed(4) : 'N/A';
 
-      // Obter informações da conta OWNER_TOKEN_ACCOUNT (conta de pagamentos)
       const ownerTokenAccountInfo = await CONNECTION.getAccountInfo(OWNER_TOKEN_ACCOUNT);
       const ownerTokenAccountBalance = ownerTokenAccountInfo ? (ownerTokenAccountInfo.lamports / LAMPORTS_PER_SOL).toFixed(4) : 'N/A';
 
-      // Verificar se OWNER_TOKEN_ACCOUNT é uma conta de token SPL e obter detalhes
       let tokenInfo = {};
       try {
         const tokenAccount = await getAccount(CONNECTION, OWNER_TOKEN_ACCOUNT);
@@ -270,15 +220,9 @@ function App() {
           decimals: tokenAccount.decimals || 'N/A',
         };
       } catch (error) {
-        tokenInfo = {
-          isTokenAccount: false,
-          mint: 'N/A',
-          tokenBalance: 'N/A',
-          decimals: 'N/A',
-        };
+        tokenInfo = { isTokenAccount: false, mint: 'N/A', tokenBalance: 'N/A', decimals: 'N/A' };
       }
 
-      // Obter informações do programa (PROGRAM_ID)
       const programInfo = await CONNECTION.getAccountInfo(PROGRAM_ID);
       const programBalance = programInfo ? (programInfo.lamports / LAMPORTS_PER_SOL).toFixed(4) : 'N/A';
       const programExecutable = programInfo ? programInfo.executable : 'N/A';
@@ -307,9 +251,10 @@ function App() {
     }
   };
 
-  const buyCidacake = async () => {
+  const buyCidacake = async (productId) => {
+    const amount = amounts[productId] || '';
     if (!amount || amount <= 0) {
-      setStatus('Insira uma quantidade válida!');
+      setStatus('Insira uma quantidade válida para o produto selecionado!');
       return;
     }
 
@@ -320,59 +265,94 @@ function App() {
         throw new Error('Conecte a carteira primeiro!');
       }
 
-      // Verificar se a conta CAKE_ACCOUNT está inicializada
       const accountInfo = await CONNECTION.getAccountInfo(CAKE_ACCOUNT);
       if (!accountInfo || !accountInfo.data || accountInfo.data.length < 48) {
-        throw new Error('A conta CAKE_ACCOUNT não está inicializada. Clique em "Atualizar Estoque" para inicializá-la.');
+        throw new Error('A conta CAKE_ACCOUNT não está inicializada.');
       }
 
       const buyerPubkey = wallet.publicKey;
-      const buyerTokenAccount = new PublicKey('7hJhA7P3QmPH37cth5ugpsMcsWk7iQBJqupSpE3W2AKu');
+      const buyerTokenAccount = new PublicKey('GwUA3r93pkMUYNLE59En8SMy2MBZfoLrSi7ntCFqcEgz');
 
-      // Verificar se OWNER_TOKEN_ACCOUNT é uma conta de token SPL válida
-      let tokenInfo;
-      try {
-        tokenInfo = await getAccount(CONNECTION, OWNER_TOKEN_ACCOUNT);
-      } catch (error) {
-        throw new Error('A conta OWNER_TOKEN_ACCOUNT não é uma conta de token SPL válida. Configure uma conta de token válida para prosseguir.');
-      }
+      const sellData = new Uint8Array(9);
+      sellData[0] = 3; // Instrução "sell" (ID 3)
+      const amountBytes = new BigUint64Array([BigInt(amount)]);
+      sellData.set(new Uint8Array(amountBytes.buffer), 1);
 
-      const sellData = Buffer.concat([
-        Buffer.from([3]), // Instrução "sell" (ID 3)
-        Buffer.from(new Uint8Array(new BigUint64Array([BigInt(amount)]).buffer)), // Quantidade de bolos
-      ]);
+      const transaction = new Transaction().add(
+        new TransactionInstruction({
+          programId: PROGRAM_ID,
+          keys: [
+            { pubkey: OWNER_PUBKEY, isSigner: false, isWritable: true },
+            { pubkey: CAKE_ACCOUNT, isSigner: false, isWritable: true },
+            { pubkey: buyerPubkey, isSigner: true, isWritable: true },
+            { pubkey: buyerTokenAccount, isSigner: false, isWritable: true },
+            { pubkey: OWNER_TOKEN_ACCOUNT, isSigner: false, isWritable: true },
+            { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+          ],
+          data: sellData,
+        })
+      );
 
-      const instruction = new TransactionInstruction({
-        programId: PROGRAM_ID,
-        keys: [
-          { pubkey: OWNER_PUBKEY, isSigner: false, isWritable: true }, // owner (gravável)
-          { pubkey: CAKE_ACCOUNT, isSigner: false, isWritable: true }, // cake_account (gravável)
-          { pubkey: buyerPubkey, isSigner: true, isWritable: true }, // buyer (gravável, signer)
-          { pubkey: buyerTokenAccount, isSigner: false, isWritable: true }, // buyer_token_account (gravável)
-          { pubkey: OWNER_TOKEN_ACCOUNT, isSigner: false, isWritable: true }, // owner_token_account (gravável)
-          { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // token_program (somente leitura)
-          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // system_program (somente leitura)
-        ],
-        data: sellData,
-      });
-
-      const transaction = new Transaction();
-      transaction.add(instruction);
       transaction.recentBlockhash = (await CONNECTION.getLatestBlockhash()).blockhash;
       transaction.feePayer = buyerPubkey;
 
-      console.log('Transação pronta, assinando...');
       const signedTx = await walletProvider.signTransaction(transaction);
       const txId = await CONNECTION.sendRawTransaction(signedTx.serialize());
       await CONNECTION.confirmTransaction(txId);
-      console.log('Compra concluída, txId:', txId);
+
+      const product = products.find(p => p.id === productId);
+      const totalPrice = product.price * amount;
+      const purchase = {
+        txId,
+        productName: product.name,
+        quantity: amount,
+        totalPrice,
+        date: new Date().toLocaleString(),
+      };
+      setPurchaseHistory(prev => [purchase, ...prev].slice(0, 10));
       setStatus(`Compra realizada! Tx: ${txId}`);
-      // Atualizar o estoque após a compra
-      await fetchStock();
+      await fetchProducts();
+      setAmounts(prev => ({ ...prev, [productId]: '' }));
     } catch (error) {
       console.error('Erro ao processar compra:', error);
       setStatus(`Erro: ${error.message}`);
     }
+  };
+
+  const handleAmountChange = (productId, value) => {
+    setAmounts(prev => ({ ...prev, [productId]: value }));
+  };
+
+  const copyTxId = async (txId) => {
+    try {
+      await navigator.clipboard.writeText(txId);
+      setCopyMessage('TxID copiado!');
+      setTimeout(() => setCopyMessage(''), 2000); // Limpar mensagem após 2 segundos
+    } catch (error) {
+      console.error('Erro ao copiar TxID:', error);
+      setCopyMessage('Erro ao copiar TxID');
+      setTimeout(() => setCopyMessage(''), 2000);
+    }
+  };
+
+  const buttonStyle = {
+    padding: '10px 20px',
+    backgroundColor: '#007bff',
+    color: '#fff',
+    border: 'none',
+    borderRadius: '5px',
+    cursor: 'pointer',
+    fontSize: '16px',
+    transition: 'background-color 0.3s',
+  };
+
+  const copyButtonStyle = {
+    background: 'none',
+    border: 'none',
+    cursor: 'pointer',
+    padding: '0 5px',
+    verticalAlign: 'middle',
   };
 
   return (
@@ -385,67 +365,43 @@ function App() {
           </p>
           <div style={{ display: 'flex', justifyContent: 'center', flexWrap: 'wrap', gap: '10px', marginBottom: '20px' }}>
             <button
-              onClick={() => setActiveMenu('buy')}
+              onClick={() => setActiveMenu('products')}
               style={{
-                padding: '10px 20px',
-                backgroundColor: activeMenu === 'buy' ? '#0056b3' : '#007bff',
-                color: '#fff',
-                border: 'none',
-                borderRadius: '5px',
-                cursor: 'pointer',
-                fontSize: '16px',
-                transition: 'background-color 0.3s',
+                ...buttonStyle,
+                backgroundColor: activeMenu === 'products' ? '#0056b3' : '#007bff',
               }}
               onMouseOver={(e) => (e.target.style.backgroundColor = '#0056b3')}
-              onMouseOut={(e) => (e.target.style.backgroundColor = activeMenu === 'buy' ? '#0056b3' : '#007bff')}
+              onMouseOut={(e) => (e.target.style.backgroundColor = activeMenu === 'products' ? '#0056b3' : '#007bff')}
             >
-              Compra de Bolos
+              Lista de Produtos
             </button>
             <button
-              onClick={() => { setActiveMenu('stock'); fetchStock(); }}
+              onClick={() => setActiveMenu('history')}
               style={{
-                padding: '10px 20px',
-                backgroundColor: activeMenu === 'stock' ? '#0056b3' : '#007bff',
-                color: '#fff',
-                border: 'none',
-                borderRadius: '5px',
-                cursor: 'pointer',
-                fontSize: '16px',
-                transition: 'background-color 0.3s',
+                ...buttonStyle,
+                backgroundColor: activeMenu === 'history' ? '#0056b3' : '#007bff',
               }}
               onMouseOver={(e) => (e.target.style.backgroundColor = '#0056b3')}
-              onMouseOut={(e) => (e.target.style.backgroundColor = activeMenu === 'stock' ? '#0056b3' : '#007bff')}
+              onMouseOut={(e) => (e.target.style.backgroundColor = activeMenu === 'history' ? '#0056b3' : '#007bff')}
             >
-              Saldo do Estoque
+              Histórico de Compras
             </button>
             <button
               onClick={() => setActiveMenu('update')}
               style={{
-                padding: '10px 20px',
+                ...buttonStyle,
                 backgroundColor: activeMenu === 'update' ? '#0056b3' : '#007bff',
-                color: '#fff',
-                border: 'none',
-                borderRadius: '5px',
-                cursor: 'pointer',
-                fontSize: '16px',
-                transition: 'background-color 0.3s',
               }}
               onMouseOver={(e) => (e.target.style.backgroundColor = '#0056b3')}
               onMouseOut={(e) => (e.target.style.backgroundColor = activeMenu === 'update' ? '#0056b3' : '#007bff')}
             >
-              Atualizar Estoque e Preço
+              Atualizar Preço
             </button>
             <button
               onClick={() => { setActiveMenu('contract'); fetchContractInfo(); }}
               style={{
-                padding: '10px 20px',
+                ...buttonStyle,
                 backgroundColor: activeMenu === 'contract' ? '#0056b3' : '#007bff',
-                color: '#fff',
-                border: 'none',
-                borderRadius: '5px',
-                cursor: 'pointer',
-                fontSize: '16px',
-                transition: 'background-color 0.3s',
               }}
               onMouseOver={(e) => (e.target.style.backgroundColor = '#0056b3')}
               onMouseOut={(e) => (e.target.style.backgroundColor = activeMenu === 'contract' ? '#0056b3' : '#007bff')}
@@ -455,14 +411,8 @@ function App() {
             <button
               onClick={disconnectWallet}
               style={{
-                padding: '10px 20px',
+                ...buttonStyle,
                 backgroundColor: '#dc3545',
-                color: '#fff',
-                border: 'none',
-                borderRadius: '5px',
-                cursor: 'pointer',
-                fontSize: '16px',
-                transition: 'background-color 0.3s',
               }}
               onMouseOver={(e) => (e.target.style.backgroundColor = '#c82333')}
               onMouseOut={(e) => (e.target.style.backgroundColor = '#dc3545')}
@@ -471,73 +421,97 @@ function App() {
             </button>
           </div>
           <div style={{ marginTop: '20px' }}>
-            {activeMenu === 'buy' && (
+            {activeMenu === 'products' && (
               <div>
-                <h2 style={{ color: '#333', marginBottom: '10px' }}>Compra de Bolos</h2>
-                <input
-                  type="number"
-                  id="amount"
-                  placeholder="Quantidade"
-                  min="1"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                  style={{
-                    padding: '10px',
-                    marginRight: '10px',
-                    border: '1px solid #ccc',
-                    borderRadius: '5px',
-                    fontSize: '16px',
-                  }}
-                />
-                <button
-                  onClick={buyCidacake}
-                  style={{
-                    padding: '10px 20px',
-                    backgroundColor: '#007bff',
-                    color: '#fff',
-                    border: 'none',
-                    borderRadius: '5px',
-                    cursor: 'pointer',
-                    fontSize: '16px',
-                    transition: 'background-color 0.3s',
-                  }}
-                  onMouseOver={(e) => (e.target.style.backgroundColor = '#0056b3')}
-                  onMouseOut={(e) => (e.target.style.backgroundColor = '#007bff')}
-                >
-                  Comprar
-                </button>
+                <h2 style={{ color: '#333', marginBottom: '10px' }}>Lista de Produtos</h2>
+                {console.log('Renderizando Lista de Produtos, isAccountInitialized:', isAccountInitialized)}
+                {isAccountInitialized && products.length > 0 ? (
+                  <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: '#fff', borderRadius: '5px' }}>
+                    <thead>
+                      <tr style={{ backgroundColor: '#007bff', color: '#fff' }}>
+                        <th style={{ padding: '12px' }}>Nome</th>
+                        <th style={{ padding: '12px' }}>Preço (lamports)</th>
+                        <th style={{ padding: '12px' }}>Estoque</th>
+                        <th style={{ padding: '12px' }}>Ação</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {products.map(product => (
+                        <tr key={product.id} style={{ borderBottom: '1px solid #ddd' }}>
+                          <td style={{ padding: '12px' }}>{product.name}</td>
+                          <td style={{ padding: '12px' }}>{product.price}</td>
+                          <td style={{ padding: '12px' }}>{product.stock}</td>
+                          <td style={{ padding: '12px' }}>
+                            <input
+                              type="number"
+                              placeholder="Quantidade"
+                              min="1"
+                              value={amounts[product.id] || ''}
+                              onChange={(e) => handleAmountChange(product.id, e.target.value)}
+                              style={{ padding: '5px', marginRight: '5px', width: '80px' }}
+                            />
+                            <button
+                              onClick={() => buyCidacake(product.id)}
+                              style={{ padding: '5px 10px', backgroundColor: '#007bff', color: '#fff', border: 'none', borderRadius: '3px' }}
+                            >
+                              Comprar
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <p>Conta CAKE_ACCOUNT não está inicializada. Por favor, inicialize-a via Solana CLI.</p>
+                )}
               </div>
             )}
-            {activeMenu === 'stock' && stock !== null && (
+            {activeMenu === 'history' && (
               <div>
-                <h2 style={{ color: '#333', marginBottom: '10px' }}>Saldo do Estoque</h2>
-                <p style={{ color: '#555' }}>{stock} bolos disponíveis</p>
-                <p style={{ color: '#555' }}>Preço por bolo: {price} lamports</p>
+                <h2 style={{ color: '#333', marginBottom: '10px' }}>Histórico de Compras</h2>
+                {purchaseHistory.length > 0 ? (
+                  <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: '#fff', borderRadius: '5px' }}>
+                    <thead>
+                      <tr style={{ backgroundColor: '#007bff', color: '#fff' }}>
+                        <th style={{ padding: '12px' }}>Produto</th>
+                        <th style={{ padding: '12px' }}>Quantidade</th>
+                        <th style={{ padding: '12px' }}>Preço Total (lamports)</th>
+                        <th style={{ padding: '12px' }}>Data</th>
+                        <th style={{ padding: '12px' }}>TxID</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {purchaseHistory.map((purchase, index) => (
+                        <tr key={index} style={{ borderBottom: '1px solid #ddd' }}>
+                          <td style={{ padding: '12px' }}>{purchase.productName}</td>
+                          <td style={{ padding: '12px' }}>{purchase.quantity}</td>
+                          <td style={{ padding: '12px' }}>{purchase.totalPrice}</td>
+                          <td style={{ padding: '12px' }}>{purchase.date}</td>
+                          <td style={{ padding: '12px', fontSize: '12px' }}>
+                            {purchase.txId.slice(0, 10)}...
+                            <button
+                              onClick={() => copyTxId(purchase.txId)}
+                              style={copyButtonStyle}
+                              title="Copiar TxID completo"
+                            >
+                              📋
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <p>Nenhuma compra registrada ainda.</p>
+                )}
+                {copyMessage && (
+                  <p style={{ color: '#28a745', textAlign: 'center', marginTop: '10px' }}>{copyMessage}</p>
+                )}
               </div>
             )}
             {activeMenu === 'update' && (
               <div>
-                <h2 style={{ color: '#333', marginBottom: '10px' }}>Atualizar Estoque e Preço</h2>
-                <div style={{ marginBottom: '20px' }}>
-                  <button
-                    onClick={initializeStock}
-                    style={{
-                      padding: '10px 20px',
-                      backgroundColor: '#007bff',
-                      color: '#fff',
-                      border: 'none',
-                      borderRadius: '5px',
-                      cursor: 'pointer',
-                      fontSize: '16px',
-                      transition: 'background-color 0.3s',
-                      marginRight: '10px',
-                    }}
-                    onMouseOver={(e) => (e.target.style.backgroundColor = '#0056b3')}
-                    onMouseOut={(e) => (e.target.style.backgroundColor = '#007bff')}
-                  >
-                    Atualizar Estoque
-                  </button>
-                </div>
+                <h2 style={{ color: '#333', marginBottom: '10px' }}>Atualizar Preço</h2>
                 <div>
                   <input
                     type="number"
@@ -546,26 +520,11 @@ function App() {
                     min="1"
                     value={newPrice}
                     onChange={(e) => setNewPrice(e.target.value)}
-                    style={{
-                      padding: '10px',
-                      marginRight: '10px',
-                      border: '1px solid #ccc',
-                      borderRadius: '5px',
-                      fontSize: '16px',
-                    }}
+                    style={{ padding: '10px', marginRight: '10px', border: '1px solid #ccc', borderRadius: '5px', fontSize: '16px' }}
                   />
                   <button
                     onClick={updatePrice}
-                    style={{
-                      padding: '10px 20px',
-                      backgroundColor: '#007bff',
-                      color: '#fff',
-                      border: 'none',
-                      borderRadius: '5px',
-                      cursor: 'pointer',
-                      fontSize: '16px',
-                      transition: 'background-color 0.3s',
-                    }}
+                    style={{ ...buttonStyle }}
                     onMouseOver={(e) => (e.target.style.backgroundColor = '#0056b3')}
                     onMouseOut={(e) => (e.target.style.backgroundColor = '#007bff')}
                   >
@@ -701,17 +660,7 @@ function App() {
                 </div>
                 <button
                   onClick={() => setShowContractInfo(false)}
-                  style={{
-                    marginTop: '20px',
-                    padding: '10px 20px',
-                    backgroundColor: '#007bff',
-                    color: '#fff',
-                    border: 'none',
-                    borderRadius: '5px',
-                    cursor: 'pointer',
-                    fontSize: '16px',
-                    transition: 'background-color 0.3s',
-                  }}
+                  style={{ ...buttonStyle, marginTop: '20px' }}
                   onMouseOver={(e) => (e.target.style.backgroundColor = '#0056b3')}
                   onMouseOut={(e) => (e.target.style.backgroundColor = '#007bff')}
                 >
@@ -725,16 +674,7 @@ function App() {
         <div style={{ textAlign: 'center' }}>
           <button
             onClick={connectWallet}
-            style={{
-              padding: '10px 20px',
-              backgroundColor: '#007bff',
-              color: '#fff',
-              border: 'none',
-              borderRadius: '5px',
-              cursor: 'pointer',
-              fontSize: '16px',
-              transition: 'background-color 0.3s',
-            }}
+            style={{ ...buttonStyle }}
             onMouseOver={(e) => (e.target.style.backgroundColor = '#0056b3')}
             onMouseOut={(e) => (e.target.style.backgroundColor = '#007bff')}
           >
