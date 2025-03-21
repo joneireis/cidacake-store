@@ -1,13 +1,42 @@
 import React, { useState, useEffect } from 'react';
-import { PublicKey, Connection, TransactionInstruction, Transaction, SystemProgram, LAMPORTS_PER_SOL } from '@solana/web3.js';
-import { TOKEN_PROGRAM_ID, getAccount } from '@solana/spl-token';
+import { Connection, PublicKey, SystemProgram, TransactionInstruction, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { getAccount } from '@solana/spl-token'; // Mantemos getAccount, pois é usado em fetchContractInfo
+import { Buffer } from 'buffer'; // Importação do Buffer movida para o topo
 import './App.css';
 
-const PROGRAM_ID = new PublicKey('nY3F2GFxvit5n6g1Ar6drGgSNcFYzwgixpcUxC9p722');
+// Adiciona o Buffer ao escopo global para uso no navegador
+window.Buffer = Buffer;
+
+const PROGRAM_ID = new PublicKey('9QdnR2gfx1hGVD7SfWzaVQLFS6CoVY7yGFrc8xGHDzaz');
 const CONNECTION = new Connection('https://api.devnet.solana.com', 'confirmed');
 const OWNER_PUBKEY = new PublicKey('yG9KfVSMZaMZHSY48KKxpvtdPZhbAMUsYsAfKZDUkW5');
-const CAKE_ACCOUNT = new PublicKey('DBNGpwu4dcTvF8F6ogie2dxhpY4QeEkTVqe6p8xFtqbj');
+const CAKE_ACCOUNT = new PublicKey('6r7mfqBdkM69qJEXmBj5qJZs9umqrNas4XYG9smsxcJ9');
 const OWNER_TOKEN_ACCOUNT = new PublicKey('4YbgNnchNjJtXj62wMHfvogB6BU6Vbye947CZxfB9SrG');
+
+// Definir a estrutura PurchaseHistory para deserializar os dados da blockchain
+const PurchaseHistory = {
+  LEN: 57, // Tamanho total da estrutura em bytes (1 + 8 + 8 + 32 + 8)
+
+  unpack_from_slice(src) {
+    if (src.length !== this.LEN) {
+      throw new Error('Dados inválidos para PurchaseHistory: tamanho incorreto');
+    }
+
+    const product_id = src[0]; // u8 (1 byte)
+    const quantity = src.readBigUInt64LE(1); // u64 (8 bytes)
+    const total_price = src.readBigUInt64LE(9); // u64 (8 bytes)
+    const buyer = new PublicKey(src.slice(17, 49)); // Pubkey (32 bytes)
+    const timestamp = src.readBigInt64LE(49); // i64 (8 bytes)
+
+    return {
+      product_id,
+      quantity,
+      total_price,
+      buyer,
+      timestamp,
+    };
+  },
+};
 
 function App() {
   const [walletAddress, setWalletAddress] = useState(null);
@@ -19,16 +48,9 @@ function App() {
   const [showContractInfo, setShowContractInfo] = useState(false);
   const [activeMenu, setActiveMenu] = useState(null);
   const [products, setProducts] = useState([]);
-  const [purchaseHistory, setPurchaseHistory] = useState(() => {
-    const savedHistory = localStorage.getItem('purchaseHistory');
-    return savedHistory ? JSON.parse(savedHistory) : [];
-  });
+  const [purchaseHistory, setPurchaseHistory] = useState([]);
   const [isAccountInitialized, setIsAccountInitialized] = useState(false);
-  const [copyMessage, setCopyMessage] = useState(''); // Estado para mensagem de cópia
-
-  useEffect(() => {
-    localStorage.setItem('purchaseHistory', JSON.stringify(purchaseHistory));
-  }, [purchaseHistory]);
+  const [copyMessage, setCopyMessage] = useState('');
 
   const connectWallet = async () => {
     try {
@@ -44,6 +66,7 @@ function App() {
       setWalletProvider(provider);
       setStatus(`Carteira conectada: ${pubkey}`);
       await checkAccountStatus();
+      await fetchPurchaseHistory();
     } catch (error) {
       console.error('Erro ao conectar à carteira:', error);
       setStatus(`Erro: ${error.message}`);
@@ -62,6 +85,7 @@ function App() {
       setShowContractInfo(false);
       setActiveMenu(null);
       setProducts([]);
+      setPurchaseHistory([]);
       setIsAccountInitialized(false);
       setStatus('Carteira desconectada com sucesso!');
     } catch (error) {
@@ -110,6 +134,52 @@ function App() {
       fetchProducts();
     }
   }, [isAccountInitialized]);
+
+  const fetchPurchaseHistory = async () => {
+    try {
+      console.log('Buscando histórico de compras da blockchain...');
+      setStatus('Carregando histórico de compras...');
+
+      // Buscar contas de histórico associadas ao programa
+      const programAccounts = await CONNECTION.getProgramAccounts(PROGRAM_ID, {
+        filters: [
+          { dataSize: PurchaseHistory.LEN }, // Filtrar por contas do tipo PurchaseHistory
+        ],
+      });
+
+      if (!programAccounts || programAccounts.length === 0) {
+        setPurchaseHistory([]);
+        setStatus('Nenhuma compra encontrada na blockchain.');
+        return;
+      }
+
+      const history = [];
+      for (const account of programAccounts) {
+        const data = account.account.data;
+        const purchase = PurchaseHistory.unpack_from_slice(data);
+
+        const productName = purchase.product_id === 1 ? 'Bolo de Chocolate' :
+          purchase.product_id === 2 ? 'Bolo de Morango' :
+            'Bolo de Baunilha';
+        const date = new Date(Number(purchase.timestamp) * 1000).toLocaleString();
+
+        history.push({
+          txId: account.pubkey.toString(),
+          productName,
+          quantity: purchase.quantity.toString(),
+          totalPrice: purchase.total_price.toString(),
+          date,
+          buyer: purchase.buyer.toString(),
+        });
+      }
+
+      setPurchaseHistory(history.sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 10));
+      setStatus('Histórico de compras carregado com sucesso!');
+    } catch (error) {
+      console.error('Erro ao buscar histórico de compras:', error);
+      setStatus(`Erro ao carregar histórico de compras: ${error.message}`);
+    }
+  };
 
   const updatePrice = async () => {
     if (!newPrice || newPrice <= 0) {
@@ -208,7 +278,7 @@ function App() {
       const ownerAccountBalance = ownerAccountInfo ? (cakeAccountInfo.lamports / LAMPORTS_PER_SOL).toFixed(4) : 'N/A';
 
       const ownerTokenAccountInfo = await CONNECTION.getAccountInfo(OWNER_TOKEN_ACCOUNT);
-      const ownerTokenAccountBalance = ownerTokenAccountInfo ? (ownerTokenAccountInfo.lamports / LAMPORTS_PER_SOL).toFixed(4) : 'N/A';
+      const ownerTokenAccountBalance = ownerAccountInfo ? (ownerTokenAccountInfo.lamports / LAMPORTS_PER_SOL).toFixed(4) : 'N/A';
 
       let tokenInfo = {};
       try {
@@ -271,24 +341,37 @@ function App() {
       }
 
       const buyerPubkey = wallet.publicKey;
-      const buyerTokenAccount = new PublicKey('GwUA3r93pkMUYNLE59En8SMy2MBZfoLrSi7ntCFqcEgz');
 
-      const sellData = new Uint8Array(9);
+      // Derivar a chave pública da history_account usando sementes binárias
+      const historyAccountSeeds = [
+        Buffer.from('history'), // "history" como bytes
+        Buffer.from(buyerPubkey.toBytes()), // buyerPubkey como bytes
+        Buffer.from([productId]), // productId como um byte
+      ];
+
+      // Derivar o endereço da history_account e o bump
+      const [historyAccount, bump] = await PublicKey.findProgramAddress(
+        historyAccountSeeds,
+        PROGRAM_ID
+      );
+
+      const sellData = new Uint8Array(10); // Aumentamos para 10 bytes para incluir o product_id
       sellData[0] = 3; // Instrução "sell" (ID 3)
       const amountBytes = new BigUint64Array([BigInt(amount)]);
       sellData.set(new Uint8Array(amountBytes.buffer), 1);
+      sellData[9] = productId; // Adicionamos o product_id no último byte
 
       const transaction = new Transaction().add(
         new TransactionInstruction({
           programId: PROGRAM_ID,
           keys: [
-            { pubkey: OWNER_PUBKEY, isSigner: false, isWritable: true },
-            { pubkey: CAKE_ACCOUNT, isSigner: false, isWritable: true },
-            { pubkey: buyerPubkey, isSigner: true, isWritable: true },
-            { pubkey: buyerTokenAccount, isSigner: false, isWritable: true },
-            { pubkey: OWNER_TOKEN_ACCOUNT, isSigner: false, isWritable: true },
-            { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+            { pubkey: OWNER_PUBKEY, isSigner: false, isWritable: true }, // 0: owner
+            { pubkey: CAKE_ACCOUNT, isSigner: false, isWritable: true }, // 1: cake_account
+            { pubkey: buyerPubkey, isSigner: true, isWritable: true }, // 2: buyer
+            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // 3: system_program
+            { pubkey: historyAccount, isSigner: false, isWritable: true }, // 4: history_account
+            { pubkey: buyerPubkey, isSigner: true, isWritable: true }, // 5: payer (mesmo que buyer)
+            { pubkey: new PublicKey('SysvarC1ock11111111111111111111111111111111'), isSigner: false, isWritable: false }, // 6: clock
           ],
           data: sellData,
         })
@@ -301,18 +384,9 @@ function App() {
       const txId = await CONNECTION.sendRawTransaction(signedTx.serialize());
       await CONNECTION.confirmTransaction(txId);
 
-      const product = products.find(p => p.id === productId);
-      const totalPrice = product.price * amount;
-      const purchase = {
-        txId,
-        productName: product.name,
-        quantity: amount,
-        totalPrice,
-        date: new Date().toLocaleString(),
-      };
-      setPurchaseHistory(prev => [purchase, ...prev].slice(0, 10));
       setStatus(`Compra realizada! Tx: ${txId}`);
       await fetchProducts();
+      await fetchPurchaseHistory();
       setAmounts(prev => ({ ...prev, [productId]: '' }));
     } catch (error) {
       console.error('Erro ao processar compra:', error);
@@ -328,12 +402,17 @@ function App() {
     try {
       await navigator.clipboard.writeText(txId);
       setCopyMessage('TxID copiado!');
-      setTimeout(() => setCopyMessage(''), 2000); // Limpar mensagem após 2 segundos
+      setTimeout(() => setCopyMessage(''), 2000);
     } catch (error) {
       console.error('Erro ao copiar TxID:', error);
       setCopyMessage('Erro ao copiar TxID');
       setTimeout(() => setCopyMessage(''), 2000);
     }
+  };
+
+  const abbreviateAddress = (address) => {
+    if (!address) return '';
+    return `${address.slice(0, 6)}...${address.slice(-6)}`;
   };
 
   const buttonStyle = {
@@ -477,6 +556,7 @@ function App() {
                         <th style={{ padding: '12px' }}>Quantidade</th>
                         <th style={{ padding: '12px' }}>Preço Total (lamports)</th>
                         <th style={{ padding: '12px' }}>Data</th>
+                        <th style={{ padding: '12px' }}>Comprador</th>
                         <th style={{ padding: '12px' }}>TxID</th>
                       </tr>
                     </thead>
@@ -487,6 +567,7 @@ function App() {
                           <td style={{ padding: '12px' }}>{purchase.quantity}</td>
                           <td style={{ padding: '12px' }}>{purchase.totalPrice}</td>
                           <td style={{ padding: '12px' }}>{purchase.date}</td>
+                          <td style={{ padding: '12px', fontSize: '12px' }}>{abbreviateAddress(purchase.buyer)}</td>
                           <td style={{ padding: '12px', fontSize: '12px' }}>
                             {purchase.txId.slice(0, 10)}...
                             <button
