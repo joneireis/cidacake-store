@@ -1,32 +1,30 @@
 import React, { useState, useEffect } from 'react';
 import { Connection, PublicKey, SystemProgram, TransactionInstruction, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
-import { getAccount } from '@solana/spl-token'; // Mantemos getAccount, pois é usado em fetchContractInfo
-import { Buffer } from 'buffer'; // Importação do Buffer movida para o topo
+import { getAccount } from '@solana/spl-token';
+import { Buffer } from 'buffer';
 import './App.css';
 
-// Adiciona o Buffer ao escopo global para uso no navegador
 window.Buffer = Buffer;
 
-const PROGRAM_ID = new PublicKey('9QdnR2gfx1hGVD7SfWzaVQLFS6CoVY7yGFrc8xGHDzaz');
+const PROGRAM_ID = new PublicKey('E66tS4TkkYWDYipfjVaRfSRbDGLGYF4oc9fKCwDxJt9');
 const CONNECTION = new Connection('https://api.devnet.solana.com', 'confirmed');
 const OWNER_PUBKEY = new PublicKey('yG9KfVSMZaMZHSY48KKxpvtdPZhbAMUsYsAfKZDUkW5');
-const CAKE_ACCOUNT = new PublicKey('6r7mfqBdkM69qJEXmBj5qJZs9umqrNas4XYG9smsxcJ9');
+const CAKE_ACCOUNT = new PublicKey('6ryToSGEgrW5Ku9EaCq9mmQaHUZJ5GB5o7meN4UTHjwv');
 const OWNER_TOKEN_ACCOUNT = new PublicKey('4YbgNnchNjJtXj62wMHfvogB6BU6Vbye947CZxfB9SrG');
 
-// Definir a estrutura PurchaseHistory para deserializar os dados da blockchain
 const PurchaseHistory = {
-  LEN: 57, // Tamanho total da estrutura em bytes (1 + 8 + 8 + 32 + 8)
+  LEN: 57,
 
   unpack_from_slice(src) {
     if (src.length !== this.LEN) {
       throw new Error('Dados inválidos para PurchaseHistory: tamanho incorreto');
     }
 
-    const product_id = src[0]; // u8 (1 byte)
-    const quantity = src.readBigUInt64LE(1); // u64 (8 bytes)
-    const total_price = src.readBigUInt64LE(9); // u64 (8 bytes)
-    const buyer = new PublicKey(src.slice(17, 49)); // Pubkey (32 bytes)
-    const timestamp = src.readBigInt64LE(49); // i64 (8 bytes)
+    const product_id = src[0];
+    const quantity = src.readBigUInt64LE(1);
+    const total_price = src.readBigUInt64LE(9);
+    const buyer = new PublicKey(src.slice(17, 49));
+    const timestamp = src.readBigInt64LE(49);
 
     return {
       product_id,
@@ -41,7 +39,7 @@ const PurchaseHistory = {
 function App() {
   const [walletAddress, setWalletAddress] = useState(null);
   const [amounts, setAmounts] = useState({});
-  const [newPrice, setNewPrice] = useState('');
+  const [newProduct, setNewProduct] = useState({ name: '', description: '', price: '', initialStock: '' });
   const [status, setStatus] = useState('');
   const [walletProvider, setWalletProvider] = useState(null);
   const [contractInfo, setContractInfo] = useState(null);
@@ -54,14 +52,12 @@ function App() {
 
   const connectWallet = async () => {
     try {
-      console.log('Tentando conectar à carteira...');
       let provider = window.solana;
       if (!provider || !provider.isPhantom) {
         throw new Error('Por favor, instale a carteira Phantom!');
       }
       await provider.connect({ onlyIfTrusted: false });
       const pubkey = provider.publicKey.toString();
-      console.log('Carteira conectada:', pubkey);
       setWalletAddress(pubkey);
       setWalletProvider(provider);
       setStatus(`Carteira conectada: ${pubkey}`);
@@ -72,12 +68,22 @@ function App() {
       setStatus(`Erro: ${error.message}`);
     }
   };
-
+  const fetchHistoryCounter = async () => {
+    try {
+      const accountInfo = await CONNECTION.getAccountInfo(CAKE_ACCOUNT);
+      if (!accountInfo || !accountInfo.data) {
+        throw new Error('Não foi possível obter os dados da conta de estoque.');
+      }
+      return Number(accountInfo.data.readBigUInt64LE(40)); // history_counter está nos bytes 40-48
+    } catch (error) {
+      console.error('Erro ao buscar history_counter:', error);
+      return 0;
+    }
+  };
   const disconnectWallet = async () => {
     try {
       if (window.solana) {
         await window.solana.disconnect();
-        console.log('Carteira desconectada');
       }
       setWalletAddress(null);
       setWalletProvider(null);
@@ -96,30 +102,22 @@ function App() {
 
   const checkAccountStatus = async () => {
     try {
-      console.log('Verificando o status da CAKE_ACCOUNT:', CAKE_ACCOUNT.toString());
       const accountInfo = await CONNECTION.getAccountInfo(CAKE_ACCOUNT);
-      console.log('AccountInfo:', accountInfo);
       if (!accountInfo) {
-        console.log('Conta CAKE_ACCOUNT não existe.');
         setStatus('Conta CAKE_ACCOUNT não existe. Por favor, inicialize-a via Solana CLI.');
         setIsAccountInitialized(false);
         return;
       }
-      console.log('Owner da conta:', accountInfo.owner.toString(), 'PROGRAM_ID esperado:', PROGRAM_ID.toString());
       if (accountInfo.owner.toString() !== PROGRAM_ID.toString()) {
-        console.log('Conta CAKE_ACCOUNT não pertence ao programa correto.');
-        setStatus('Conta CAKE_ACCOUNT não pertence ao programa correto. Por favor, inicialize-a novamente via Solana CLI.');
+        setStatus('Conta CAKE_ACCOUNT não pertence ao programa correto.');
         setIsAccountInitialized(false);
         return;
       }
-      console.log('Tamanho dos dados da conta:', accountInfo.data.length);
-      if (accountInfo.data.length < 48) {
-        console.log('Dados da conta muito curtos para conter a estrutura CakeState.');
-        setStatus('Conta CAKE_ACCOUNT não está inicializada corretamente (dados insuficientes). Por favor, inicialize-a via Solana CLI.');
+      if (accountInfo.data.length < 40) {
+        setStatus('Conta CAKE_ACCOUNT não está inicializada corretamente.');
         setIsAccountInitialized(false);
         return;
       }
-      console.log('Conta CAKE_ACCOUNT está inicializada corretamente.');
       setIsAccountInitialized(true);
     } catch (error) {
       console.error('Erro ao verificar o status da conta:', error);
@@ -130,21 +128,16 @@ function App() {
 
   useEffect(() => {
     if (isAccountInitialized) {
-      console.log('isAccountInitialized mudou para true, chamando fetchProducts...');
       fetchProducts();
     }
   }, [isAccountInitialized]);
+  
 
   const fetchPurchaseHistory = async () => {
     try {
-      console.log('Buscando histórico de compras da blockchain...');
       setStatus('Carregando histórico de compras...');
-
-      // Buscar contas de histórico associadas ao programa
       const programAccounts = await CONNECTION.getProgramAccounts(PROGRAM_ID, {
-        filters: [
-          { dataSize: PurchaseHistory.LEN }, // Filtrar por contas do tipo PurchaseHistory
-        ],
+        filters: [{ dataSize: PurchaseHistory.LEN }],
       });
 
       if (!programAccounts || programAccounts.length === 0) {
@@ -158,9 +151,8 @@ function App() {
         const data = account.account.data;
         const purchase = PurchaseHistory.unpack_from_slice(data);
 
-        const productName = purchase.product_id === 1 ? 'Bolo de Chocolate' :
-          purchase.product_id === 2 ? 'Bolo de Morango' :
-            'Bolo de Baunilha';
+        const product = products.find(p => p.id === purchase.product_id);
+        const productName = product ? product.name : `Produto ${purchase.product_id}`;
         const date = new Date(Number(purchase.timestamp) * 1000).toLocaleString();
 
         history.push({
@@ -181,84 +173,109 @@ function App() {
     }
   };
 
-  const updatePrice = async () => {
-    if (!newPrice || newPrice <= 0) {
-      setStatus('Insira um preço válido!');
+  const addProduct = async () => {
+    const { name, description, price, initialStock } = newProduct;
+    if (!name || !description || !price || !initialStock || price <= 0 || initialStock < 0) {
+      setStatus('Preencha todos os campos corretamente!');
       return;
     }
 
     try {
-      setStatus('Atualizando preço...');
+      setStatus('Adicionando novo produto...');
       const transaction = new Transaction();
-      const updatePriceData = new Uint8Array(9);
-      updatePriceData[0] = 2; // Instrução "update_price" (ID 2)
-      const priceBytes = new BigUint64Array([BigInt(newPrice)]);
-      updatePriceData.set(new Uint8Array(priceBytes.buffer), 1);
+      const addProductData = new Uint8Array(177);
+      addProductData[0] = 1; // Instrução "add_product"
 
-      const updatePriceInstruction = new TransactionInstruction({
+      const nameBytes = new TextEncoder().encode(name.padEnd(32, '\0').slice(0, 32));
+      const descriptionBytes = new TextEncoder().encode(description.padEnd(128, '\0').slice(0, 128));
+      const priceBytes = new BigUint64Array([BigInt(price)]);
+      const stockBytes = new BigUint64Array([BigInt(initialStock)]);
+
+      addProductData.set(nameBytes, 1);
+      addProductData.set(descriptionBytes, 33);
+      addProductData.set(new Uint8Array(priceBytes.buffer), 161);
+      addProductData.set(new Uint8Array(stockBytes.buffer), 169);
+
+      const productId = (await fetchProductCounter()) || 0;
+      const [productAccount] = await PublicKey.findProgramAddress(
+        [Buffer.from('product'), Buffer.from(new BigUint64Array([BigInt(productId)]).buffer)],
+        PROGRAM_ID
+      );
+
+      const addProductInstruction = new TransactionInstruction({
         programId: PROGRAM_ID,
         keys: [
-          { pubkey: OWNER_PUBKEY, isSigner: false, isWritable: false },
           { pubkey: CAKE_ACCOUNT, isSigner: false, isWritable: true },
-          { pubkey: new PublicKey(walletAddress), isSigner: true, isWritable: false },
+          { pubkey: productAccount, isSigner: false, isWritable: true },
+          { pubkey: OWNER_PUBKEY, isSigner: false, isWritable: false },
+          { pubkey: new PublicKey(walletAddress), isSigner: true, isWritable: true },
+          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
         ],
-        data: updatePriceData,
+        data: addProductData,
       });
 
-      transaction.add(updatePriceInstruction);
+      transaction.add(addProductInstruction);
       transaction.recentBlockhash = (await CONNECTION.getLatestBlockhash()).blockhash;
       transaction.feePayer = new PublicKey(walletAddress);
 
       const signedTx = await walletProvider.signTransaction(transaction);
       const txId = await CONNECTION.sendRawTransaction(signedTx.serialize());
       await CONNECTION.confirmTransaction(txId);
-      console.log('Preço atualizado, txId:', txId);
-      setStatus(`Preço atualizado com sucesso! Tx: ${txId}`);
+      setStatus(`Produto adicionado com sucesso! Tx: ${txId}`);
+      setNewProduct({ name: '', description: '', price: '', initialStock: '' });
       await fetchProducts();
     } catch (error) {
-      console.error('Erro ao atualizar preço:', error);
-      setStatus(`Erro ao atualizar preço: ${error.message}`);
+      console.error('Erro ao adicionar produto:', error);
+      setStatus(`Erro ao adicionar produto: ${error.message}`);
+    }
+  };
+
+  const fetchProductCounter = async () => {
+    try {
+      const accountInfo = await CONNECTION.getAccountInfo(CAKE_ACCOUNT);
+      if (!accountInfo || !accountInfo.data) {
+        throw new Error('Não foi possível obter os dados da conta de estoque.');
+      }
+      return Number(accountInfo.data.readBigUInt64LE(32)); // product_counter está nos bytes 32-40
+    } catch (error) {
+      console.error('Erro ao buscar product_counter:', error);
+      return 0;
     }
   };
 
   const fetchProducts = async () => {
     try {
-      console.log('Iniciando fetchProducts...');
       setStatus('Consultando produtos...');
       const accountInfo = await CONNECTION.getAccountInfo(CAKE_ACCOUNT);
-      console.log('AccountInfo em fetchProducts:', accountInfo);
       if (!accountInfo || !accountInfo.data) {
-        throw new Error('Não foi possível obter os dados da conta de estoque. A conta pode não estar inicializada.');
+        throw new Error('Não foi possível obter os dados da conta de estoque.');
       }
 
-      if (accountInfo.owner.toString() !== PROGRAM_ID.toString()) {
-        throw new Error('Conta CAKE_ACCOUNT não pertence ao programa correto.');
+      const productCounter = Number(accountInfo.data.readBigUInt64LE(32));
+      const fetchedProducts = [];
+
+      for (let productId = 0; productId < productCounter; productId++) {
+        const [productAccount] = await PublicKey.findProgramAddress(
+          [Buffer.from('product'), Buffer.from(new BigUint64Array([BigInt(productId)]).buffer)],
+          PROGRAM_ID
+        );
+
+        const productInfo = await CONNECTION.getAccountInfo(productAccount);
+        if (!productInfo || !productInfo.data) continue;
+
+        const id = Number(productInfo.data.readBigUInt64LE(0));
+        const nameBytes = productInfo.data.slice(8, 40);
+        const name = new TextDecoder().decode(nameBytes).replace(/\0/g, '');
+        const descriptionBytes = productInfo.data.slice(40, 168);
+        const description = new TextDecoder().decode(descriptionBytes).replace(/\0/g, '');
+        const price = Number(productInfo.data.readBigUInt64LE(168));
+        const stock = Number(productInfo.data.readBigUInt64LE(176));
+
+        fetchedProducts.push({ id, name, description, price, stock });
       }
 
-      if (accountInfo.data.length < 48) {
-        throw new Error('Dados da conta muito curtos para conter a estrutura CakeState (necessita de 48 bytes).');
-      }
-
-      const stockData = accountInfo.data.readBigUInt64LE(0);
-      const priceData = accountInfo.data.readBigUInt64LE(8);
-      const ownerData = new PublicKey(accountInfo.data.slice(16, 48));
-
-      const stockValue = Number(stockData);
-      const priceValue = Number(priceData);
-
-      console.log('Estoque total de bolos:', stockValue);
-      console.log('Preço base por bolo (lamports):', priceValue);
-      console.log('Owner:', ownerData.toString());
-
-      const derivedProducts = [
-        { id: 1, name: 'Bolo de Chocolate', price: priceValue, stock: Math.floor(stockValue * 0.5) || 0 },
-        { id: 2, name: 'Bolo de Morango', price: Math.floor(priceValue * 1.2), stock: Math.floor(stockValue * 0.3) || 0 },
-        { id: 3, name: 'Bolo de Baunilha', price: Math.floor(priceValue * 0.8), stock: Math.floor(stockValue * 0.2) || 0 },
-      ];
-
-      console.log('Produtos derivados:', derivedProducts);
-      setProducts(derivedProducts);
-      setStatus(`Produtos carregados: Estoque total ${stockValue} bolos, Preço base ${priceValue} lamports`);
+      setProducts(fetchedProducts);
+      setStatus(`Produtos carregados: ${fetchedProducts.length} bolos encontrados.`);
     } catch (error) {
       console.error('Erro ao consultar produtos:', error);
       setStatus(`Erro ao consultar produtos: ${error.message}`);
@@ -275,10 +292,10 @@ function App() {
       const cakeAccountExecutable = cakeAccountInfo ? cakeAccountInfo.executable : 'N/A';
 
       const ownerAccountInfo = await CONNECTION.getAccountInfo(OWNER_PUBKEY);
-      const ownerAccountBalance = ownerAccountInfo ? (cakeAccountInfo.lamports / LAMPORTS_PER_SOL).toFixed(4) : 'N/A';
+      const ownerAccountBalance = ownerAccountInfo ? (ownerAccountInfo.lamports / LAMPORTS_PER_SOL).toFixed(4) : 'N/A';
 
       const ownerTokenAccountInfo = await CONNECTION.getAccountInfo(OWNER_TOKEN_ACCOUNT);
-      const ownerTokenAccountBalance = ownerAccountInfo ? (ownerTokenAccountInfo.lamports / LAMPORTS_PER_SOL).toFixed(4) : 'N/A';
+      const ownerTokenAccountBalance = ownerTokenAccountInfo ? (ownerTokenAccountInfo.lamports / LAMPORTS_PER_SOL).toFixed(4) : 'N/A';
 
       let tokenInfo = {};
       try {
@@ -341,37 +358,47 @@ function App() {
       }
 
       const buyerPubkey = wallet.publicKey;
-
-      // Derivar a chave pública da history_account usando sementes binárias
-      const historyAccountSeeds = [
-        Buffer.from('history'), // "history" como bytes
-        Buffer.from(buyerPubkey.toBytes()), // buyerPubkey como bytes
-        Buffer.from([productId]), // productId como um byte
-      ];
-
-      // Derivar o endereço da history_account e o bump
-      const [historyAccount, bump] = await PublicKey.findProgramAddress(
-        historyAccountSeeds,
+      const [productAccount] = await PublicKey.findProgramAddress(
+        [Buffer.from('product'), Buffer.from(new BigUint64Array([BigInt(productId)]).buffer)],
         PROGRAM_ID
       );
 
-      const sellData = new Uint8Array(10); // Aumentamos para 10 bytes para incluir o product_id
-      sellData[0] = 3; // Instrução "sell" (ID 3)
+      const historyIndex = await fetchHistoryCounter();
+      console.log('productId:', productId);
+      console.log('historyIndex:', historyIndex);
+      console.log('buyerPubkey:', buyerPubkey.toString());
+
+      const [historyAccount] = await PublicKey.findProgramAddress(
+        [
+          Buffer.from('history'),
+          Buffer.from(buyerPubkey.toBytes()),
+          Buffer.from(new BigUint64Array([BigInt(productId)]).buffer),
+          Buffer.from(new BigUint64Array([BigInt(historyIndex)]).buffer),
+        ],
+        PROGRAM_ID
+      );
+
+      console.log('historyAccount:', historyAccount.toString());
+
+      const sellData = new Uint8Array(17);
+      sellData[0] = 4; // Instrução "sell"
+      const productIdBytes = new BigUint64Array([BigInt(productId)]);
       const amountBytes = new BigUint64Array([BigInt(amount)]);
-      sellData.set(new Uint8Array(amountBytes.buffer), 1);
-      sellData[9] = productId; // Adicionamos o product_id no último byte
+      sellData.set(new Uint8Array(productIdBytes.buffer), 1);
+      sellData.set(new Uint8Array(amountBytes.buffer), 9);
 
       const transaction = new Transaction().add(
         new TransactionInstruction({
           programId: PROGRAM_ID,
           keys: [
-            { pubkey: OWNER_PUBKEY, isSigner: false, isWritable: true }, // 0: owner
-            { pubkey: CAKE_ACCOUNT, isSigner: false, isWritable: true }, // 1: cake_account
-            { pubkey: buyerPubkey, isSigner: true, isWritable: true }, // 2: buyer
-            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // 3: system_program
-            { pubkey: historyAccount, isSigner: false, isWritable: true }, // 4: history_account
-            { pubkey: buyerPubkey, isSigner: true, isWritable: true }, // 5: payer (mesmo que buyer)
-            { pubkey: new PublicKey('SysvarC1ock11111111111111111111111111111111'), isSigner: false, isWritable: false }, // 6: clock
+            { pubkey: OWNER_PUBKEY, isSigner: false, isWritable: true },
+            { pubkey: CAKE_ACCOUNT, isSigner: false, isWritable: true },
+            { pubkey: productAccount, isSigner: false, isWritable: true },
+            { pubkey: buyerPubkey, isSigner: true, isWritable: true },
+            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+            { pubkey: historyAccount, isSigner: false, isWritable: true },
+            { pubkey: buyerPubkey, isSigner: true, isWritable: true },
+            { pubkey: new PublicKey('SysvarC1ock11111111111111111111111111111111'), isSigner: false, isWritable: false },
           ],
           data: sellData,
         })
@@ -387,6 +414,9 @@ function App() {
       setStatus(`Compra realizada! Tx: ${txId}`);
       await fetchProducts();
       await fetchPurchaseHistory();
+      if (activeMenu === 'contract') {
+        await fetchContractInfo();
+      }
       setAmounts(prev => ({ ...prev, [productId]: '' }));
     } catch (error) {
       console.error('Erro ao processar compra:', error);
@@ -455,6 +485,17 @@ function App() {
               Lista de Produtos
             </button>
             <button
+              onClick={() => setActiveMenu('addProduct')}
+              style={{
+                ...buttonStyle,
+                backgroundColor: activeMenu === 'addProduct' ? '#0056b3' : '#007bff',
+              }}
+              onMouseOver={(e) => (e.target.style.backgroundColor = '#0056b3')}
+              onMouseOut={(e) => (e.target.style.backgroundColor = activeMenu === 'addProduct' ? '#0056b3' : '#007bff')}
+            >
+              Adicionar Produto
+            </button>
+            <button
               onClick={() => setActiveMenu('history')}
               style={{
                 ...buttonStyle,
@@ -464,17 +505,6 @@ function App() {
               onMouseOut={(e) => (e.target.style.backgroundColor = activeMenu === 'history' ? '#0056b3' : '#007bff')}
             >
               Histórico de Compras
-            </button>
-            <button
-              onClick={() => setActiveMenu('update')}
-              style={{
-                ...buttonStyle,
-                backgroundColor: activeMenu === 'update' ? '#0056b3' : '#007bff',
-              }}
-              onMouseOver={(e) => (e.target.style.backgroundColor = '#0056b3')}
-              onMouseOut={(e) => (e.target.style.backgroundColor = activeMenu === 'update' ? '#0056b3' : '#007bff')}
-            >
-              Atualizar Preço
             </button>
             <button
               onClick={() => { setActiveMenu('contract'); fetchContractInfo(); }}
@@ -503,12 +533,12 @@ function App() {
             {activeMenu === 'products' && (
               <div>
                 <h2 style={{ color: '#333', marginBottom: '10px' }}>Lista de Produtos</h2>
-                {console.log('Renderizando Lista de Produtos, isAccountInitialized:', isAccountInitialized)}
                 {isAccountInitialized && products.length > 0 ? (
                   <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: '#fff', borderRadius: '5px' }}>
                     <thead>
                       <tr style={{ backgroundColor: '#007bff', color: '#fff' }}>
                         <th style={{ padding: '12px' }}>Nome</th>
+                        <th style={{ padding: '12px' }}>Descrição</th>
                         <th style={{ padding: '12px' }}>Preço (lamports)</th>
                         <th style={{ padding: '12px' }}>Estoque</th>
                         <th style={{ padding: '12px' }}>Ação</th>
@@ -518,6 +548,7 @@ function App() {
                       {products.map(product => (
                         <tr key={product.id} style={{ borderBottom: '1px solid #ddd' }}>
                           <td style={{ padding: '12px' }}>{product.name}</td>
+                          <td style={{ padding: '12px' }}>{product.description}</td>
                           <td style={{ padding: '12px' }}>{product.price}</td>
                           <td style={{ padding: '12px' }}>{product.stock}</td>
                           <td style={{ padding: '12px' }}>
@@ -541,8 +572,53 @@ function App() {
                     </tbody>
                   </table>
                 ) : (
-                  <p>Conta CAKE_ACCOUNT não está inicializada. Por favor, inicialize-a via Solana CLI.</p>
+                  <p>Conta CAKE_ACCOUNT não está inicializada ou nenhum produto foi cadastrado.</p>
                 )}
+              </div>
+            )}
+            {activeMenu === 'addProduct' && (
+              <div>
+                <h2 style={{ color: '#333', marginBottom: '10px' }}>Adicionar Novo Produto</h2>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxWidth: '400px', margin: '0 auto' }}>
+                  <input
+                    type="text"
+                    placeholder="Nome do Bolo"
+                    value={newProduct.name}
+                    onChange={(e) => setNewProduct({ ...newProduct, name: e.target.value })}
+                    style={{ padding: '10px', border: '1px solid #ccc', borderRadius: '5px' }}
+                  />
+                  <input
+                    type="text"
+                    placeholder="Descrição"
+                    value={newProduct.description}
+                    onChange={(e) => setNewProduct({ ...newProduct, description: e.target.value })}
+                    style={{ padding: '10px', border: '1px solid #ccc', borderRadius: '5px' }}
+                  />
+                  <input
+                    type="number"
+                    placeholder="Preço (lamports)"
+                    min="1"
+                    value={newProduct.price}
+                    onChange={(e) => setNewProduct({ ...newProduct, price: e.target.value })}
+                    style={{ padding: '10px', border: '1px solid #ccc', borderRadius: '5px' }}
+                  />
+                  <input
+                    type="number"
+                    placeholder="Estoque Inicial"
+                    min="0"
+                    value={newProduct.initialStock}
+                    onChange={(e) => setNewProduct({ ...newProduct, initialStock: e.target.value })}
+                    style={{ padding: '10px', border: '1px solid #ccc', borderRadius: '5px' }}
+                  />
+                  <button
+                    onClick={addProduct}
+                    style={{ ...buttonStyle }}
+                    onMouseOver={(e) => (e.target.style.backgroundColor = '#0056b3')}
+                    onMouseOut={(e) => (e.target.style.backgroundColor = '#007bff')}
+                  >
+                    Adicionar Produto
+                  </button>
+                </div>
               </div>
             )}
             {activeMenu === 'history' && (
@@ -588,30 +664,6 @@ function App() {
                 {copyMessage && (
                   <p style={{ color: '#28a745', textAlign: 'center', marginTop: '10px' }}>{copyMessage}</p>
                 )}
-              </div>
-            )}
-            {activeMenu === 'update' && (
-              <div>
-                <h2 style={{ color: '#333', marginBottom: '10px' }}>Atualizar Preço</h2>
-                <div>
-                  <input
-                    type="number"
-                    id="newPrice"
-                    placeholder="Novo preço (lamports)"
-                    min="1"
-                    value={newPrice}
-                    onChange={(e) => setNewPrice(e.target.value)}
-                    style={{ padding: '10px', marginRight: '10px', border: '1px solid #ccc', borderRadius: '5px', fontSize: '16px' }}
-                  />
-                  <button
-                    onClick={updatePrice}
-                    style={{ ...buttonStyle }}
-                    onMouseOver={(e) => (e.target.style.backgroundColor = '#0056b3')}
-                    onMouseOut={(e) => (e.target.style.backgroundColor = '#007bff')}
-                  >
-                    Atualizar Preço
-                  </button>
-                </div>
               </div>
             )}
             {activeMenu === 'contract' && showContractInfo && contractInfo && (
