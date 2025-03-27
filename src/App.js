@@ -1,16 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { Connection, PublicKey, SystemProgram, TransactionInstruction, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { Connection, PublicKey, SystemProgram, TransactionInstruction, Transaction, LAMPORTS_PER_SOL, SendTransactionError } from '@solana/web3.js';
 import { getAccount } from '@solana/spl-token';
 import { Buffer } from 'buffer';
 import './App.css';
 
 window.Buffer = Buffer;
 
-const PROGRAM_ID = new PublicKey('E66tS4TkkYWDYipfjVaRfSRbDGLGYF4oc9fKCwDxJt9');
+const PROGRAM_ID = new PublicKey('2A7wXZpFidpJ1ieRXMjaugYB2T96MQwUBDfq6YSuZjBC');
 const CONNECTION = new Connection('https://api.devnet.solana.com', 'confirmed');
 const OWNER_PUBKEY = new PublicKey('yG9KfVSMZaMZHSY48KKxpvtdPZhbAMUsYsAfKZDUkW5');
-const CAKE_ACCOUNT = new PublicKey('6ryToSGEgrW5Ku9EaCq9mmQaHUZJ5GB5o7meN4UTHjwv');
-const OWNER_TOKEN_ACCOUNT = new PublicKey('4YbgNnchNjJtXj62wMHfvogB6BU6Vbye947CZxfB9SrG');
+const CAKE_ACCOUNT = new PublicKey('Gxh7BG5mTAiZ9MPBNtqnL2XXSf6Q4pa3mFCLjT6s1Qsm');
+const OWNER_TOKEN_ACCOUNT = new PublicKey('AP1B1X3QYVo54LDreFgeAxhCULhqrQw89tffiDHBGKhf');
+const USDT_MINT = new PublicKey('9V3992f9PJup6T1AGiXeBNzp2VE7zDjXkJj7Df4g9vxr');
+const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
 
 const PurchaseHistory = {
   LEN: 57,
@@ -68,18 +70,20 @@ function App() {
       setStatus(`Erro: ${error.message}`);
     }
   };
+
   const fetchHistoryCounter = async () => {
     try {
       const accountInfo = await CONNECTION.getAccountInfo(CAKE_ACCOUNT);
       if (!accountInfo || !accountInfo.data) {
         throw new Error('Não foi possível obter os dados da conta de estoque.');
       }
-      return Number(accountInfo.data.readBigUInt64LE(40)); // history_counter está nos bytes 40-48
+      return Number(accountInfo.data.readBigUInt64LE(40));
     } catch (error) {
       console.error('Erro ao buscar history_counter:', error);
       return 0;
     }
   };
+
   const disconnectWallet = async () => {
     try {
       if (window.solana) {
@@ -131,7 +135,6 @@ function App() {
       fetchProducts();
     }
   }, [isAccountInitialized]);
-  
 
   const fetchPurchaseHistory = async () => {
     try {
@@ -180,15 +183,30 @@ function App() {
       return;
     }
 
+    if (walletAddress !== OWNER_PUBKEY.toString()) {
+      setStatus('Apenas o proprietário pode adicionar produtos!');
+      return;
+    }
+
     try {
       setStatus('Adicionando novo produto...');
       const transaction = new Transaction();
+
+      const productId = (await fetchProductCounter()) || 0;
+      const [productAccount, bump] = await PublicKey.findProgramAddress(
+        [Buffer.from('product'), Buffer.from(new BigUint64Array([BigInt(productId)]).buffer)],
+        PROGRAM_ID
+      );
+      console.log('Product Account:', productAccount.toString());
+      console.log('Bump:', bump);
+
       const addProductData = new Uint8Array(177);
       addProductData[0] = 1; // Instrução "add_product"
 
       const nameBytes = new TextEncoder().encode(name.padEnd(32, '\0').slice(0, 32));
       const descriptionBytes = new TextEncoder().encode(description.padEnd(128, '\0').slice(0, 128));
-      const priceBytes = new BigUint64Array([BigInt(price)]);
+      const priceInLamports = BigInt(Math.round(parseFloat(price) * 1000000));
+      const priceBytes = new BigUint64Array([priceInLamports]);
       const stockBytes = new BigUint64Array([BigInt(initialStock)]);
 
       addProductData.set(nameBytes, 1);
@@ -196,31 +214,44 @@ function App() {
       addProductData.set(new Uint8Array(priceBytes.buffer), 161);
       addProductData.set(new Uint8Array(stockBytes.buffer), 169);
 
-      const productId = (await fetchProductCounter()) || 0;
-      const [productAccount] = await PublicKey.findProgramAddress(
-        [Buffer.from('product'), Buffer.from(new BigUint64Array([BigInt(productId)]).buffer)],
-        PROGRAM_ID
-      );
-
       const addProductInstruction = new TransactionInstruction({
         programId: PROGRAM_ID,
         keys: [
           { pubkey: CAKE_ACCOUNT, isSigner: false, isWritable: true },
           { pubkey: productAccount, isSigner: false, isWritable: true },
           { pubkey: OWNER_PUBKEY, isSigner: false, isWritable: false },
-          { pubkey: new PublicKey(walletAddress), isSigner: true, isWritable: true },
+          { pubkey: walletProvider.publicKey, isSigner: true, isWritable: true },
           { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
         ],
         data: addProductData,
       });
 
       transaction.add(addProductInstruction);
-      transaction.recentBlockhash = (await CONNECTION.getLatestBlockhash()).blockhash;
-      transaction.feePayer = new PublicKey(walletAddress);
+
+      const { blockhash, lastValidBlockHeight } = await CONNECTION.getLatestBlockhash('confirmed');
+      transaction.recentBlockhash = blockhash;
+      transaction.feePayer = walletProvider.publicKey;
+      console.log('Blockhash:', blockhash);
+      console.log('Last Valid Block Height:', lastValidBlockHeight);
+      console.log('Fee Payer:', walletProvider.publicKey.toString());
+      console.log('Wallet Address:', walletAddress);
 
       const signedTx = await walletProvider.signTransaction(transaction);
-      const txId = await CONNECTION.sendRawTransaction(signedTx.serialize());
-      await CONNECTION.confirmTransaction(txId);
+      console.log('Transação assinada.');
+
+      const txId = await CONNECTION.sendRawTransaction(signedTx.serialize(), {
+        skipPreflight: false,
+        maxRetries: 5,
+      });
+      console.log('Transação enviada. TxId:', txId);
+
+      await CONNECTION.confirmTransaction({
+        signature: txId,
+        blockhash: blockhash,
+        lastValidBlockHeight: lastValidBlockHeight,
+      }, 'confirmed', { commitment: 'confirmed', timeout: 60000 });
+      console.log('Transação confirmada.');
+
       setStatus(`Produto adicionado com sucesso! Tx: ${txId}`);
       setNewProduct({ name: '', description: '', price: '', initialStock: '' });
       await fetchProducts();
@@ -236,7 +267,7 @@ function App() {
       if (!accountInfo || !accountInfo.data) {
         throw new Error('Não foi possível obter os dados da conta de estoque.');
       }
-      return Number(accountInfo.data.readBigUInt64LE(32)); // product_counter está nos bytes 32-40
+      return Number(accountInfo.data.readBigUInt64LE(32));
     } catch (error) {
       console.error('Erro ao buscar product_counter:', error);
       return 0;
@@ -364,11 +395,7 @@ function App() {
       );
 
       const historyIndex = await fetchHistoryCounter();
-      console.log('productId:', productId);
-      console.log('historyIndex:', historyIndex);
-      console.log('buyerPubkey:', buyerPubkey.toString());
-
-      const [historyAccount] = await PublicKey.findProgramAddress(
+      const [historyAccount, historyBump] = await PublicKey.findProgramAddress(
         [
           Buffer.from('history'),
           Buffer.from(buyerPubkey.toBytes()),
@@ -378,14 +405,13 @@ function App() {
         PROGRAM_ID
       );
 
-      console.log('historyAccount:', historyAccount.toString());
+      const buyerTokenAccount = new PublicKey('5PmmgsYepReKZorTWXQMK6BoE9DbX6TXvcSgx3kUVCVP');
+      const ownerTokenAccount = OWNER_TOKEN_ACCOUNT;
 
       const sellData = new Uint8Array(17);
-      sellData[0] = 4; // Instrução "sell"
-      const productIdBytes = new BigUint64Array([BigInt(productId)]);
-      const amountBytes = new BigUint64Array([BigInt(amount)]);
-      sellData.set(new Uint8Array(productIdBytes.buffer), 1);
-      sellData.set(new Uint8Array(amountBytes.buffer), 9);
+      sellData[0] = 4; // "sell" instruction
+      sellData.set(new Uint8Array(new BigUint64Array([BigInt(productId)]).buffer), 1);
+      sellData.set(new Uint8Array(new BigUint64Array([BigInt(amount)]).buffer), 9);
 
       const transaction = new Transaction().add(
         new TransactionInstruction({
@@ -397,19 +423,32 @@ function App() {
             { pubkey: buyerPubkey, isSigner: true, isWritable: true },
             { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
             { pubkey: historyAccount, isSigner: false, isWritable: true },
-            { pubkey: buyerPubkey, isSigner: true, isWritable: true },
+            { pubkey: buyerPubkey, isSigner: true, isWritable: true }, // payer
             { pubkey: new PublicKey('SysvarC1ock11111111111111111111111111111111'), isSigner: false, isWritable: false },
+            { pubkey: buyerTokenAccount, isSigner: false, isWritable: true },
+            { pubkey: ownerTokenAccount, isSigner: false, isWritable: true },
+            { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+            { pubkey: USDT_MINT, isSigner: false, isWritable: false },
           ],
           data: sellData,
         })
       );
 
-      transaction.recentBlockhash = (await CONNECTION.getLatestBlockhash()).blockhash;
+      const { blockhash, lastValidBlockHeight } = await CONNECTION.getLatestBlockhash('confirmed');
+      transaction.recentBlockhash = blockhash;
       transaction.feePayer = buyerPubkey;
 
       const signedTx = await walletProvider.signTransaction(transaction);
-      const txId = await CONNECTION.sendRawTransaction(signedTx.serialize());
-      await CONNECTION.confirmTransaction(txId);
+      const txId = await CONNECTION.sendRawTransaction(signedTx.serialize(), {
+        skipPreflight: false,
+        maxRetries: 5,
+      });
+
+      await CONNECTION.confirmTransaction({
+        signature: txId,
+        blockhash,
+        lastValidBlockHeight,
+      }, 'confirmed');
 
       setStatus(`Compra realizada! Tx: ${txId}`);
       await fetchProducts();
@@ -420,6 +459,10 @@ function App() {
       setAmounts(prev => ({ ...prev, [productId]: '' }));
     } catch (error) {
       console.error('Erro ao processar compra:', error);
+      if (error instanceof SendTransactionError) {
+        const logs = await error.getLogs(CONNECTION);
+        console.log('Transaction Logs:', logs);
+      }
       setStatus(`Erro: ${error.message}`);
     }
   };
@@ -443,6 +486,111 @@ function App() {
   const abbreviateAddress = (address) => {
     if (!address) return '';
     return `${address.slice(0, 6)}...${address.slice(-6)}`;
+  };
+
+  const renderProductList = () => {
+    return (
+      <div>
+        <h2 style={{ color: '#333', marginBottom: '10px' }}>Lista de Produtos</h2>
+        {isAccountInitialized && products.length > 0 ? (
+          <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: '#fff', borderRadius: '5px' }}>
+            <thead>
+              <tr style={{ backgroundColor: '#007bff', color: '#fff' }}>
+                <th style={{ padding: '12px' }}>Nome</th>
+                <th style={{ padding: '12px' }}>Descrição</th>
+                <th style={{ padding: '12px' }}>Preço (USDT)</th>
+                <th style={{ padding: '12px' }}>Estoque</th>
+                <th style={{ padding: '12px' }}>Ação</th>
+              </tr>
+            </thead>
+            <tbody>
+              {products.map(product => (
+                <tr key={product.id} style={{ borderBottom: '1px solid #ddd' }}>
+                  <td style={{ padding: '12px' }}>{product.name}</td>
+                  <td style={{ padding: '12px' }}>{product.description}</td>
+                  <td style={{ padding: '12px' }}>{(product.price / 1000000).toFixed(2)}</td>
+                  <td style={{ padding: '12px' }}>{product.stock}</td>
+                  <td style={{ padding: '12px' }}>
+                    <input
+                      type="number"
+                      placeholder="Quantidade"
+                      min="1"
+                      value={amounts[product.id] || ''}
+                      onChange={(e) => handleAmountChange(product.id, e.target.value)}
+                      style={{ padding: '5px', marginRight: '5px', width: '80px' }}
+                    />
+                    <button
+                      onClick={() => buyCidacake(product.id)}
+                      style={{ padding: '5px 10px', backgroundColor: '#007bff', color: '#fff', border: 'none', borderRadius: '3px' }}
+                    >
+                      Comprar
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <p>Conta CAKE_ACCOUNT não está inicializada ou nenhum produto foi cadastrado.</p>
+        )}
+      </div>
+    );
+  };
+
+  const renderPurchaseHistory = () => {
+    const copyButtonStyle = {
+      background: 'none',
+      border: 'none',
+      cursor: 'pointer',
+      padding: '0 5px',
+      verticalAlign: 'middle',
+    };
+
+    return (
+      <div>
+        <h2 style={{ color: '#333', marginBottom: '10px' }}>Histórico de Compras</h2>
+        {purchaseHistory.length > 0 ? (
+          <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: '#fff', borderRadius: '5px' }}>
+            <thead>
+              <tr style={{ backgroundColor: '#007bff', color: '#fff' }}>
+                <th style={{ padding: '12px' }}>Produto</th>
+                <th style={{ padding: '12px' }}>Quantidade</th>
+                <th style={{ padding: '12px' }}>Preço Total (USDT)</th>
+                <th style={{ padding: '12px' }}>Data</th>
+                <th style={{ padding: '12px' }}>Comprador</th>
+                <th style={{ padding: '12px' }}>TxID</th>
+              </tr>
+            </thead>
+            <tbody>
+              {purchaseHistory.map((purchase, index) => (
+                <tr key={index} style={{ borderBottom: '1px solid #ddd' }}>
+                  <td style={{ padding: '12px' }}>{purchase.productName}</td>
+                  <td style={{ padding: '12px' }}>{purchase.quantity}</td>
+                  <td style={{ padding: '12px' }}>{(purchase.totalPrice / 1000000).toFixed(2)}</td>
+                  <td style={{ padding: '12px' }}>{purchase.date}</td>
+                  <td style={{ padding: '12px', fontSize: '12px' }}>{abbreviateAddress(purchase.buyer)}</td>
+                  <td style={{ padding: '12px', fontSize: '12px' }}>
+                    {purchase.txId.slice(0, 10)}...
+                    <button
+                      onClick={() => copyTxId(purchase.txId)}
+                      style={copyButtonStyle}
+                      title="Copiar TxID completo"
+                    >
+                      📋
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <p>Nenhuma compra registrada ainda.</p>
+        )}
+        {copyMessage && (
+          <p style={{ color: '#28a745', textAlign: 'center', marginTop: '10px' }}>{copyMessage}</p>
+        )}
+      </div>
+    );
   };
 
   const buttonStyle = {
@@ -530,52 +678,7 @@ function App() {
             </button>
           </div>
           <div style={{ marginTop: '20px' }}>
-            {activeMenu === 'products' && (
-              <div>
-                <h2 style={{ color: '#333', marginBottom: '10px' }}>Lista de Produtos</h2>
-                {isAccountInitialized && products.length > 0 ? (
-                  <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: '#fff', borderRadius: '5px' }}>
-                    <thead>
-                      <tr style={{ backgroundColor: '#007bff', color: '#fff' }}>
-                        <th style={{ padding: '12px' }}>Nome</th>
-                        <th style={{ padding: '12px' }}>Descrição</th>
-                        <th style={{ padding: '12px' }}>Preço (lamports)</th>
-                        <th style={{ padding: '12px' }}>Estoque</th>
-                        <th style={{ padding: '12px' }}>Ação</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {products.map(product => (
-                        <tr key={product.id} style={{ borderBottom: '1px solid #ddd' }}>
-                          <td style={{ padding: '12px' }}>{product.name}</td>
-                          <td style={{ padding: '12px' }}>{product.description}</td>
-                          <td style={{ padding: '12px' }}>{product.price}</td>
-                          <td style={{ padding: '12px' }}>{product.stock}</td>
-                          <td style={{ padding: '12px' }}>
-                            <input
-                              type="number"
-                              placeholder="Quantidade"
-                              min="1"
-                              value={amounts[product.id] || ''}
-                              onChange={(e) => handleAmountChange(product.id, e.target.value)}
-                              style={{ padding: '5px', marginRight: '5px', width: '80px' }}
-                            />
-                            <button
-                              onClick={() => buyCidacake(product.id)}
-                              style={{ padding: '5px 10px', backgroundColor: '#007bff', color: '#fff', border: 'none', borderRadius: '3px' }}
-                            >
-                              Comprar
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                ) : (
-                  <p>Conta CAKE_ACCOUNT não está inicializada ou nenhum produto foi cadastrado.</p>
-                )}
-              </div>
-            )}
+            {activeMenu === 'products' && renderProductList()}
             {activeMenu === 'addProduct' && (
               <div>
                 <h2 style={{ color: '#333', marginBottom: '10px' }}>Adicionar Novo Produto</h2>
@@ -596,8 +699,9 @@ function App() {
                   />
                   <input
                     type="number"
-                    placeholder="Preço (lamports)"
-                    min="1"
+                    placeholder="Preço (USDT)"
+                    min="0.01"
+                    step="0.01"
                     value={newProduct.price}
                     onChange={(e) => setNewProduct({ ...newProduct, price: e.target.value })}
                     style={{ padding: '10px', border: '1px solid #ccc', borderRadius: '5px' }}
@@ -621,51 +725,7 @@ function App() {
                 </div>
               </div>
             )}
-            {activeMenu === 'history' && (
-              <div>
-                <h2 style={{ color: '#333', marginBottom: '10px' }}>Histórico de Compras</h2>
-                {purchaseHistory.length > 0 ? (
-                  <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: '#fff', borderRadius: '5px' }}>
-                    <thead>
-                      <tr style={{ backgroundColor: '#007bff', color: '#fff' }}>
-                        <th style={{ padding: '12px' }}>Produto</th>
-                        <th style={{ padding: '12px' }}>Quantidade</th>
-                        <th style={{ padding: '12px' }}>Preço Total (lamports)</th>
-                        <th style={{ padding: '12px' }}>Data</th>
-                        <th style={{ padding: '12px' }}>Comprador</th>
-                        <th style={{ padding: '12px' }}>TxID</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {purchaseHistory.map((purchase, index) => (
-                        <tr key={index} style={{ borderBottom: '1px solid #ddd' }}>
-                          <td style={{ padding: '12px' }}>{purchase.productName}</td>
-                          <td style={{ padding: '12px' }}>{purchase.quantity}</td>
-                          <td style={{ padding: '12px' }}>{purchase.totalPrice}</td>
-                          <td style={{ padding: '12px' }}>{purchase.date}</td>
-                          <td style={{ padding: '12px', fontSize: '12px' }}>{abbreviateAddress(purchase.buyer)}</td>
-                          <td style={{ padding: '12px', fontSize: '12px' }}>
-                            {purchase.txId.slice(0, 10)}...
-                            <button
-                              onClick={() => copyTxId(purchase.txId)}
-                              style={copyButtonStyle}
-                              title="Copiar TxID completo"
-                            >
-                              📋
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                ) : (
-                  <p>Nenhuma compra registrada ainda.</p>
-                )}
-                {copyMessage && (
-                  <p style={{ color: '#28a745', textAlign: 'center', marginTop: '10px' }}>{copyMessage}</p>
-                )}
-              </div>
-            )}
+            {activeMenu === 'history' && renderPurchaseHistory()}
             {activeMenu === 'contract' && showContractInfo && contractInfo && (
               <div style={{ marginTop: '20px', padding: '20px', backgroundColor: '#f9f9f9', borderRadius: '10px', boxShadow: '0 4px 8px rgba(0, 0, 0, 0.1)' }}>
                 <h3 style={{ color: '#333', marginBottom: '20px', fontSize: '24px', borderBottom: '2px solid #007bff', paddingBottom: '5px' }}>

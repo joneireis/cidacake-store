@@ -13,7 +13,7 @@ async function initializeCakeAccount() {
 
   const CAKE_ACCOUNT = cakeAccountKeypair.publicKey;
   const OWNER_PUBKEY = ownerKeypair.publicKey;
-  const PROGRAM_ID = new PublicKey('E66tS4TkkYWDYipfjVaRfSRbDGLGYF4oc9fKCwDxJt9'); // Corrigido
+  const PROGRAM_ID = new PublicKey('2A7wXZpFidpJ1ieRXMjaugYB2T96MQwUBDfq6YSuZjBC'); // Corrigido
 
   console.log('CAKE_ACCOUNT:', CAKE_ACCOUNT.toString());
   console.log('OWNER_PUBKEY:', OWNER_PUBKEY.toString());
