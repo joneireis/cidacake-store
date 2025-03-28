@@ -325,7 +325,7 @@ function App() {
       const cakeAccountRentEpoch = cakeAccountInfo.rentEpoch;
       const cakeAccountExecutable = cakeAccountInfo.executable;
 
-      // Extrair product_counter e history_counter
+      // Extrair product_counter e history_counter como Number
       const productCounter = Number(cakeAccountInfo.data.readBigUInt64LE(32));
       const historyCounter = Number(cakeAccountInfo.data.readBigUInt64LE(40));
 
@@ -335,13 +335,13 @@ function App() {
 
       // Informações da OWNER_TOKEN_ACCOUNT (USDT)
       const ownerTokenAccountInfo = await getAccount(CONNECTION, OWNER_TOKEN_ACCOUNT);
-      const ownerTokenBalance = ownerTokenAccountInfo.amount / 10 ** 6; // Ajustado para USDT (6 decimais)
+      const ownerTokenBalance = Number(ownerTokenAccountInfo.amount) / 10 ** 6; // Convertendo BigInt para Number
       const ownerTokenMint = ownerTokenAccountInfo.mint.toString();
 
       // Informações da BUYER_TOKEN_ACCOUNT (USDT)
       const buyerTokenAccount = new PublicKey('5PmmgsYepReKZorTWXQMK6BoE9DbX6TXvcSgx3kUVCVP');
       const buyerTokenAccountInfo = await getAccount(CONNECTION, buyerTokenAccount);
-      const buyerTokenBalance = buyerTokenAccountInfo.amount / 10 ** 6; // Ajustado para USDT (6 decimais)
+      const buyerTokenBalance = Number(buyerTokenAccountInfo.amount) / 10 ** 6; // Convertendo BigInt para Number
 
       // Informações do PROGRAM_ID
       const programInfo = await CONNECTION.getAccountInfo(PROGRAM_ID);
@@ -357,13 +357,13 @@ function App() {
         );
         const productInfo = await CONNECTION.getAccountInfo(productAccount);
         if (productInfo && productInfo.data) {
-          const id = Number(productInfo.data.readBigUInt64LE(0));
+          const id = Number(productInfo.data.readBigUInt64LE(0)); // Convertendo BigInt
           const nameBytes = productInfo.data.slice(8, 40);
           const name = new TextDecoder().decode(nameBytes).replace(/\0/g, '');
           const descriptionBytes = productInfo.data.slice(40, 168);
           const description = new TextDecoder().decode(descriptionBytes).replace(/\0/g, '');
-          const price = Number(productInfo.data.readBigUInt64LE(168)) / 10 ** 6; // Ajustado para USDT
-          const stock = Number(productInfo.data.readBigUInt64LE(176));
+          const price = Number(productInfo.data.readBigUInt64LE(168)) / 10 ** 6; // Convertendo BigInt
+          const stock = Number(productInfo.data.readBigUInt64LE(176)); // Convertendo BigInt
           productsList.push({ id, name, description, price, stock });
         }
       }
@@ -376,18 +376,18 @@ function App() {
         });
         if (programAccounts.length > 0) {
           const latestAccount = programAccounts.sort((a, b) => {
-            const aTimestamp = Number(a.account.data.readBigInt64LE(49));
-            const bTimestamp = Number(b.account.data.readBigInt64LE(49));
+            const aTimestamp = Number(a.account.data.readBigInt64LE(49)); // Convertendo BigInt
+            const bTimestamp = Number(b.account.data.readBigInt64LE(49)); // Convertendo BigInt
             return bTimestamp - aTimestamp;
           })[0];
           const purchase = PurchaseHistory.unpack_from_slice(latestAccount.account.data);
           const product = productsList.find(p => p.id === purchase.product_id) || { name: `Produto ${purchase.product_id}` };
           lastPurchase = {
             productName: product.name,
-            quantity: purchase.quantity.toString(),
-            totalPrice: (purchase.total_price / 10 ** 6).toFixed(2),
+            quantity: Number(purchase.quantity), // Convertendo BigInt
+            totalPrice: (Number(purchase.total_price) / 10 ** 6).toFixed(2), // Convertendo BigInt
             buyer: purchase.buyer.toString(),
-            timestamp: new Date(Number(purchase.timestamp) * 1000).toLocaleString(),
+            timestamp: new Date(Number(purchase.timestamp) * 1000).toLocaleString(), // Convertendo BigInt
           };
         }
       }
