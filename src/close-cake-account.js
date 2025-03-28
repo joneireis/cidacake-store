@@ -13,7 +13,7 @@ async function closeCakeAccount() {
 
     const CAKE_ACCOUNT = cakeAccountKeypair.publicKey;
     const OWNER_PUBKEY = ownerKeypair.publicKey;
-    const PROGRAM_ID = new PublicKey('HwnyTMAjzFP6R85EtTj9kNiMMCS5DFULMSnpJXi71yL4'); // PROGRAM_ID antigo
+    const PROGRAM_ID = new PublicKey('2A7wXZpFidpJ1ieRXMjaugYB2T96MQwUBDfq6YSuZjBC'); // PROGRAM_ID antigo
 
     console.log('CAKE_ACCOUNT:', CAKE_ACCOUNT.toString());
     console.log('OWNER_PUBKEY:', OWNER_PUBKEY.toString());

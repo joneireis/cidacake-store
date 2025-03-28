@@ -6,10 +6,10 @@ import './App.css';
 
 window.Buffer = Buffer;
 
-const PROGRAM_ID = new PublicKey('2A7wXZpFidpJ1ieRXMjaugYB2T96MQwUBDfq6YSuZjBC');
+const PROGRAM_ID = new PublicKey('42xArAzDPAKWxz8jg4Y3V5NkYj4YUpupNCoFKW5of6D5');
 const CONNECTION = new Connection('https://api.devnet.solana.com', 'confirmed');
 const OWNER_PUBKEY = new PublicKey('yG9KfVSMZaMZHSY48KKxpvtdPZhbAMUsYsAfKZDUkW5');
-const CAKE_ACCOUNT = new PublicKey('Gxh7BG5mTAiZ9MPBNtqnL2XXSf6Q4pa3mFCLjT6s1Qsm');
+const CAKE_ACCOUNT = new PublicKey('HUBWyjMiwAsdctup35Fkj9vdpbukNadpauPvKCaR5ADb');
 const OWNER_TOKEN_ACCOUNT = new PublicKey('AP1B1X3QYVo54LDreFgeAxhCULhqrQw89tffiDHBGKhf');
 const USDT_MINT = new PublicKey('9V3992f9PJup6T1AGiXeBNzp2VE7zDjXkJj7Df4g9vxr');
 const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
