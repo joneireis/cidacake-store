@@ -9,7 +9,7 @@ O Cidacake Store permite:
 - **Compradores**: Comprar produtos usando USDT, com transações registradas na blockchain.
 - **Usuários**: Visualizar a lista de produtos, histórico de compras e informações detalhadas do contrato.
 
-<video controls src="Screen Recording 2025-03-28 at 10.37.01.mov" title="Title"></video>
+![alt text](cidacake-video.gif)
 
 ## Pré-requisitos
 
