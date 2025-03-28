@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Connection, PublicKey, SystemProgram, TransactionInstruction, Transaction, LAMPORTS_PER_SOL, SendTransactionError } from '@solana/web3.js';
-import { getAccount } from '@solana/spl-token';
+import { getAccount, getTokenAccountsByOwner } from '@solana/spl-token';
 import { Buffer } from 'buffer';
 import './App.css';
 
@@ -15,26 +15,17 @@ const USDT_MINT = new PublicKey('9V3992f9PJup6T1AGiXeBNzp2VE7zDjXkJj7Df4g9vxr');
 const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
 
 const PurchaseHistory = {
-  LEN: 57,
-
+  LEN: 65, // Atualizado para u64 no product_id
   unpack_from_slice(src) {
     if (src.length !== this.LEN) {
       throw new Error('Dados inválidos para PurchaseHistory: tamanho incorreto');
     }
-
-    const product_id = src[0];
-    const quantity = src.readBigUInt64LE(1);
-    const total_price = src.readBigUInt64LE(9);
-    const buyer = new PublicKey(src.slice(17, 49));
-    const timestamp = src.readBigInt64LE(49);
-
-    return {
-      product_id,
-      quantity,
-      total_price,
-      buyer,
-      timestamp,
-    };
+    const product_id = Number(src.readBigUInt64LE(0));
+    const quantity = Number(src.readBigUInt64LE(8));
+    const total_price = Number(src.readBigUInt64LE(16));
+    const buyer = new PublicKey(src.slice(24, 56));
+    const timestamp = Number(src.readBigInt64LE(56));
+    return { product_id, quantity, total_price, buyer, timestamp };
   },
 };
 
@@ -51,9 +42,11 @@ function App() {
   const [purchaseHistory, setPurchaseHistory] = useState([]);
   const [isAccountInitialized, setIsAccountInitialized] = useState(false);
   const [copyMessage, setCopyMessage] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
 
   const connectWallet = async () => {
     try {
+      setIsLoading(true);
       let provider = window.solana;
       if (!provider || !provider.isPhantom) {
         throw new Error('Por favor, instale a carteira Phantom!');
@@ -67,7 +60,9 @@ function App() {
       await fetchPurchaseHistory();
     } catch (error) {
       console.error('Erro ao conectar à carteira:', error);
-      setStatus(`Erro: ${error.message}`);
+      setStatus(`Erro: Não foi possível conectar a carteira. ${error.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -86,6 +81,7 @@ function App() {
 
   const disconnectWallet = async () => {
     try {
+      setIsLoading(true);
       if (window.solana) {
         await window.solana.disconnect();
       }
@@ -100,7 +96,9 @@ function App() {
       setStatus('Carteira desconectada com sucesso!');
     } catch (error) {
       console.error('Erro ao desconectar carteira:', error);
-      setStatus(`Erro ao desconectar: ${error.message}`);
+      setStatus(`Erro: Não foi possível desconectar a carteira. ${error.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -125,7 +123,7 @@ function App() {
       setIsAccountInitialized(true);
     } catch (error) {
       console.error('Erro ao verificar o status da conta:', error);
-      setStatus(`Erro ao verificar o status da conta: ${error.message}`);
+      setStatus(`Erro: Não foi possível verificar o status da conta. ${error.message}`);
       setIsAccountInitialized(false);
     }
   };
@@ -136,9 +134,11 @@ function App() {
     }
   }, [isAccountInitialized]);
 
-  const fetchPurchaseHistory = async () => {
+  const fetchPurchaseHistory = async (page = 1, perPage = 10) => {
     try {
+      setIsLoading(true);
       setStatus('Carregando histórico de compras...');
+      const offset = (page - 1) * perPage;
       const programAccounts = await CONNECTION.getProgramAccounts(PROGRAM_ID, {
         filters: [{ dataSize: PurchaseHistory.LEN }],
       });
@@ -149,46 +149,52 @@ function App() {
         return;
       }
 
-      const history = [];
-      for (const account of programAccounts) {
+      const history = programAccounts.map(account => {
         const data = account.account.data;
         const purchase = PurchaseHistory.unpack_from_slice(data);
-
-        const product = products.find(p => p.id === purchase.product_id);
-        const productName = product ? product.name : `Produto ${purchase.product_id}`;
-        const date = new Date(Number(purchase.timestamp) * 1000).toLocaleString();
-
-        history.push({
+        const product = products.find(p => p.id === purchase.product_id) || { name: `Produto ${purchase.product_id}` };
+        return {
           txId: account.pubkey.toString(),
-          productName,
+          productName: product.name,
           quantity: purchase.quantity.toString(),
           totalPrice: purchase.total_price.toString(),
-          date,
+          date: new Date(purchase.timestamp * 1000).toLocaleString(),
           buyer: purchase.buyer.toString(),
-        });
-      }
+        };
+      }).sort((a, b) => new Date(b.date) - new Date(a.date)).slice(offset, offset + perPage);
 
-      setPurchaseHistory(history.sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 10));
-      setStatus('Histórico de compras carregado com sucesso!');
+      setPurchaseHistory(history);
+      setStatus(`Histórico de compras carregado: ${history.length} de ${programAccounts.length} exibidos.`);
     } catch (error) {
       console.error('Erro ao buscar histórico de compras:', error);
-      setStatus(`Erro ao carregar histórico de compras: ${error.message}`);
+      setStatus(`Erro: Não foi possível carregar o histórico de compras. ${error.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
   const addProduct = async () => {
-    const { name, description, price, initialStock } = newProduct;
-    if (!name || !description || !price || !initialStock || price <= 0 || initialStock < 0) {
-      setStatus('Preencha todos os campos corretamente!');
+    if (!walletProvider || !walletAddress) {
+      setStatus('Conecte a carteira antes de continuar!');
       return;
     }
-
     if (walletAddress !== OWNER_PUBKEY.toString()) {
       setStatus('Apenas o proprietário pode adicionar produtos!');
       return;
     }
 
+    const { name, description, price, initialStock } = newProduct;
+    if (!name || !description || !price || !initialStock || parseFloat(price) <= 0 || parseInt(initialStock) < 0) {
+      setStatus('Preencha todos os campos corretamente!');
+      return;
+    }
+    if (name.length > 32 || description.length > 128) {
+      setStatus('Nome (máx 32 caracteres) ou descrição (máx 128 caracteres) muito longos!');
+      return;
+    }
+
     try {
+      setIsLoading(true);
       setStatus('Adicionando novo produto...');
       const transaction = new Transaction();
 
@@ -197,15 +203,12 @@ function App() {
         [Buffer.from('product'), Buffer.from(new BigUint64Array([BigInt(productId)]).buffer)],
         PROGRAM_ID
       );
-      console.log('Product Account:', productAccount.toString());
-      console.log('Bump:', bump);
 
       const addProductData = new Uint8Array(177);
-      addProductData[0] = 1; // Instrução "add_product"
-
+      addProductData[0] = 1;
       const nameBytes = new TextEncoder().encode(name.padEnd(32, '\0').slice(0, 32));
       const descriptionBytes = new TextEncoder().encode(description.padEnd(128, '\0').slice(0, 128));
-      const priceInLamports = BigInt(Math.round(parseFloat(price) * 1000000));
+      const priceInLamports = BigInt(Math.round(parseFloat(price) * 10 ** 6));
       const priceBytes = new BigUint64Array([priceInLamports]);
       const stockBytes = new BigUint64Array([BigInt(initialStock)]);
 
@@ -227,37 +230,25 @@ function App() {
       });
 
       transaction.add(addProductInstruction);
-
       const { blockhash, lastValidBlockHeight } = await CONNECTION.getLatestBlockhash('confirmed');
       transaction.recentBlockhash = blockhash;
       transaction.feePayer = walletProvider.publicKey;
-      console.log('Blockhash:', blockhash);
-      console.log('Last Valid Block Height:', lastValidBlockHeight);
-      console.log('Fee Payer:', walletProvider.publicKey.toString());
-      console.log('Wallet Address:', walletAddress);
 
       const signedTx = await walletProvider.signTransaction(transaction);
-      console.log('Transação assinada.');
-
       const txId = await CONNECTION.sendRawTransaction(signedTx.serialize(), {
         skipPreflight: false,
         maxRetries: 5,
       });
-      console.log('Transação enviada. TxId:', txId);
 
-      await CONNECTION.confirmTransaction({
-        signature: txId,
-        blockhash: blockhash,
-        lastValidBlockHeight: lastValidBlockHeight,
-      }, 'confirmed', { commitment: 'confirmed', timeout: 60000 });
-      console.log('Transação confirmada.');
-
+      await CONNECTION.confirmTransaction({ signature: txId, blockhash, lastValidBlockHeight }, 'confirmed');
       setStatus(`Produto adicionado com sucesso! Tx: ${txId}`);
       setNewProduct({ name: '', description: '', price: '', initialStock: '' });
       await fetchProducts();
     } catch (error) {
       console.error('Erro ao adicionar produto:', error);
-      setStatus(`Erro ao adicionar produto: ${error.message}`);
+      setStatus(`Erro: Não foi possível adicionar o produto. ${error.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -274,101 +265,80 @@ function App() {
     }
   };
 
+  const fetchProductsData = async () => {
+    const accountInfo = await CONNECTION.getAccountInfo(CAKE_ACCOUNT);
+    if (!accountInfo || !accountInfo.data) {
+      throw new Error('Não foi possível obter os dados da conta de estoque.');
+    }
+    const productCounter = Number(accountInfo.data.readBigUInt64LE(32));
+    const fetchedProducts = [];
+
+    for (let productId = 0; productId < productCounter; productId++) {
+      const [productAccount] = await PublicKey.findProgramAddress(
+        [Buffer.from('product'), Buffer.from(new BigUint64Array([BigInt(productId)]).buffer)],
+        PROGRAM_ID
+      );
+      const productInfo = await CONNECTION.getAccountInfo(productAccount);
+      if (!productInfo || !productInfo.data) continue;
+
+      const id = Number(productInfo.data.readBigUInt64LE(0));
+      const nameBytes = productInfo.data.slice(8, 40);
+      const name = new TextDecoder().decode(nameBytes).replace(/\0/g, '');
+      const descriptionBytes = productInfo.data.slice(40, 168);
+      const description = new TextDecoder().decode(descriptionBytes).replace(/\0/g, '');
+      const price = Number(productInfo.data.readBigUInt64LE(168));
+      const stock = Number(productInfo.data.readBigUInt64LE(176));
+      fetchedProducts.push({ id, name, description, price, stock });
+    }
+    return fetchedProducts;
+  };
+
   const fetchProducts = async () => {
     try {
+      setIsLoading(true);
       setStatus('Consultando produtos...');
-      const accountInfo = await CONNECTION.getAccountInfo(CAKE_ACCOUNT);
-      if (!accountInfo || !accountInfo.data) {
-        throw new Error('Não foi possível obter os dados da conta de estoque.');
-      }
-
-      const productCounter = Number(accountInfo.data.readBigUInt64LE(32));
-      const fetchedProducts = [];
-
-      for (let productId = 0; productId < productCounter; productId++) {
-        const [productAccount] = await PublicKey.findProgramAddress(
-          [Buffer.from('product'), Buffer.from(new BigUint64Array([BigInt(productId)]).buffer)],
-          PROGRAM_ID
-        );
-
-        const productInfo = await CONNECTION.getAccountInfo(productAccount);
-        if (!productInfo || !productInfo.data) continue;
-
-        const id = Number(productInfo.data.readBigUInt64LE(0));
-        const nameBytes = productInfo.data.slice(8, 40);
-        const name = new TextDecoder().decode(nameBytes).replace(/\0/g, '');
-        const descriptionBytes = productInfo.data.slice(40, 168);
-        const description = new TextDecoder().decode(descriptionBytes).replace(/\0/g, '');
-        const price = Number(productInfo.data.readBigUInt64LE(168));
-        const stock = Number(productInfo.data.readBigUInt64LE(176));
-
-        fetchedProducts.push({ id, name, description, price, stock });
-      }
-
+      const fetchedProducts = await fetchProductsData();
       setProducts(fetchedProducts);
       setStatus(`Produtos carregados: ${fetchedProducts.length} bolos encontrados.`);
     } catch (error) {
       console.error('Erro ao consultar produtos:', error);
-      setStatus(`Erro ao consultar produtos: ${error.message}`);
+      setStatus(`Erro: Não foi possível consultar os produtos. ${error.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
   const fetchContractInfo = async () => {
     try {
+      setIsLoading(true);
       setStatus('Obtendo informações detalhadas do contrato...');
 
-      // Informações básicas da CAKE_ACCOUNT
       const cakeAccountInfo = await CONNECTION.getAccountInfo(CAKE_ACCOUNT);
       if (!cakeAccountInfo) throw new Error('CAKE_ACCOUNT não encontrada.');
       const cakeAccountBalance = (cakeAccountInfo.lamports / LAMPORTS_PER_SOL).toFixed(4);
       const cakeAccountSpace = cakeAccountInfo.space;
       const cakeAccountRentEpoch = cakeAccountInfo.rentEpoch;
       const cakeAccountExecutable = cakeAccountInfo.executable;
-
-      // Extrair product_counter e history_counter como Number
       const productCounter = Number(cakeAccountInfo.data.readBigUInt64LE(32));
       const historyCounter = Number(cakeAccountInfo.data.readBigUInt64LE(40));
 
-      // Informações do OWNER_PUBKEY
       const ownerAccountInfo = await CONNECTION.getAccountInfo(OWNER_PUBKEY);
       const ownerAccountBalance = ownerAccountInfo ? (ownerAccountInfo.lamports / LAMPORTS_PER_SOL).toFixed(4) : 'N/A';
 
-      // Informações da OWNER_TOKEN_ACCOUNT (USDT)
       const ownerTokenAccountInfo = await getAccount(CONNECTION, OWNER_TOKEN_ACCOUNT);
-      const ownerTokenBalance = Number(ownerTokenAccountInfo.amount) / 10 ** 6; // Convertendo BigInt para Number
+      const ownerTokenBalance = Number(ownerTokenAccountInfo.amount) / 10 ** 6;
       const ownerTokenMint = ownerTokenAccountInfo.mint.toString();
 
-      // Informações da BUYER_TOKEN_ACCOUNT (USDT)
       const buyerTokenAccount = new PublicKey('5PmmgsYepReKZorTWXQMK6BoE9DbX6TXvcSgx3kUVCVP');
       const buyerTokenAccountInfo = await getAccount(CONNECTION, buyerTokenAccount);
-      const buyerTokenBalance = Number(buyerTokenAccountInfo.amount) / 10 ** 6; // Convertendo BigInt para Number
+      const buyerTokenBalance = Number(buyerTokenAccountInfo.amount) / 10 ** 6;
 
-      // Informações do PROGRAM_ID
       const programInfo = await CONNECTION.getAccountInfo(PROGRAM_ID);
       const programBalance = programInfo ? (programInfo.lamports / LAMPORTS_PER_SOL).toFixed(4) : 'N/A';
       const programExecutable = programInfo ? programInfo.executable : 'N/A';
 
-      // Lista de produtos
-      const productsList = [];
-      for (let productId = 0; productId < productCounter; productId++) {
-        const [productAccount] = await PublicKey.findProgramAddress(
-          [Buffer.from('product'), Buffer.from(new BigUint64Array([BigInt(productId)]).buffer)],
-          PROGRAM_ID
-        );
-        const productInfo = await CONNECTION.getAccountInfo(productAccount);
-        if (productInfo && productInfo.data) {
-          const id = Number(productInfo.data.readBigUInt64LE(0)); // Convertendo BigInt
-          const nameBytes = productInfo.data.slice(8, 40);
-          const name = new TextDecoder().decode(nameBytes).replace(/\0/g, '');
-          const descriptionBytes = productInfo.data.slice(40, 168);
-          const description = new TextDecoder().decode(descriptionBytes).replace(/\0/g, '');
-          const price = Number(productInfo.data.readBigUInt64LE(168)) / 10 ** 6; // Convertendo BigInt
-          const stock = Number(productInfo.data.readBigUInt64LE(176)); // Convertendo BigInt
-          productsList.push({ id, name, description, price, stock });
-        }
-      }
+      const productsList = await fetchProductsData();
 
-      // Última compra (se existir)
       let lastPurchase = null;
       if (historyCounter > 0) {
         const programAccounts = await CONNECTION.getProgramAccounts(PROGRAM_ID, {
@@ -376,23 +346,22 @@ function App() {
         });
         if (programAccounts.length > 0) {
           const latestAccount = programAccounts.sort((a, b) => {
-            const aTimestamp = Number(a.account.data.readBigInt64LE(49)); // Convertendo BigInt
-            const bTimestamp = Number(b.account.data.readBigInt64LE(49)); // Convertendo BigInt
+            const aTimestamp = Number(a.account.data.readBigInt64LE(56));
+            const bTimestamp = Number(b.account.data.readBigInt64LE(56));
             return bTimestamp - aTimestamp;
           })[0];
           const purchase = PurchaseHistory.unpack_from_slice(latestAccount.account.data);
           const product = productsList.find(p => p.id === purchase.product_id) || { name: `Produto ${purchase.product_id}` };
           lastPurchase = {
             productName: product.name,
-            quantity: Number(purchase.quantity), // Convertendo BigInt
-            totalPrice: (Number(purchase.total_price) / 10 ** 6).toFixed(2), // Convertendo BigInt
+            quantity: purchase.quantity,
+            totalPrice: (purchase.total_price / 10 ** 6).toFixed(2),
             buyer: purchase.buyer.toString(),
-            timestamp: new Date(Number(purchase.timestamp) * 1000).toLocaleString(), // Convertendo BigInt
+            timestamp: new Date(purchase.timestamp * 1000).toLocaleString(),
           };
         }
       }
 
-      // Montar objeto com todas as informações
       const info = {
         programId: PROGRAM_ID.toString(),
         cakeAccount: CAKE_ACCOUNT.toString(),
@@ -420,22 +389,30 @@ function App() {
       setStatus('Informações detalhadas do contrato obtidas com sucesso!');
     } catch (error) {
       console.error('Erro ao obter informações do contrato:', error);
-      setStatus(`Erro ao obter informações do contrato: ${error.message}`);
+      setStatus(`Erro: Não foi possível obter informações do contrato. ${error.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
   const buyCidacake = async (productId) => {
+    if (!walletProvider || !walletAddress) {
+      setStatus('Conecte a carteira antes de continuar!');
+      return;
+    }
+
     const amount = amounts[productId] || '';
-    if (!amount || amount <= 0) {
+    if (!amount || parseInt(amount) <= 0) {
       setStatus('Insira uma quantidade válida para o produto selecionado!');
       return;
     }
 
     try {
+      setIsLoading(true);
       setStatus('Processando compra...');
       const wallet = walletProvider;
-      if (!wallet || !wallet.isConnected) {
-        throw new Error('Conecte a carteira primeiro!');
+      if (!wallet.isConnected) {
+        throw new Error('Carteira não está conectada!');
       }
 
       const accountInfo = await CONNECTION.getAccountInfo(CAKE_ACCOUNT);
@@ -450,7 +427,7 @@ function App() {
       );
 
       const historyIndex = await fetchHistoryCounter();
-      const [historyAccount, historyBump] = await PublicKey.findProgramAddress(
+      const [historyAccount] = await PublicKey.findProgramAddress(
         [
           Buffer.from('history'),
           Buffer.from(buyerPubkey.toBytes()),
@@ -460,11 +437,15 @@ function App() {
         PROGRAM_ID
       );
 
-      const buyerTokenAccount = new PublicKey('5PmmgsYepReKZorTWXQMK6BoE9DbX6TXvcSgx3kUVCVP');
+      const tokenAccounts = await CONNECTION.getTokenAccountsByOwner(buyerPubkey, { mint: USDT_MINT });
+      const buyerTokenAccount = tokenAccounts.value[0]?.pubkey;
+      if (!buyerTokenAccount) {
+        throw new Error('Conta USDT não encontrada para o comprador.');
+      }
       const ownerTokenAccount = OWNER_TOKEN_ACCOUNT;
 
       const sellData = new Uint8Array(17);
-      sellData[0] = 4; // "sell" instruction
+      sellData[0] = 4;
       sellData.set(new Uint8Array(new BigUint64Array([BigInt(productId)]).buffer), 1);
       sellData.set(new Uint8Array(new BigUint64Array([BigInt(amount)]).buffer), 9);
 
@@ -478,7 +459,7 @@ function App() {
             { pubkey: buyerPubkey, isSigner: true, isWritable: true },
             { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
             { pubkey: historyAccount, isSigner: false, isWritable: true },
-            { pubkey: buyerPubkey, isSigner: true, isWritable: true }, // payer
+            { pubkey: buyerPubkey, isSigner: true, isWritable: true },
             { pubkey: new PublicKey('SysvarC1ock11111111111111111111111111111111'), isSigner: false, isWritable: false },
             { pubkey: buyerTokenAccount, isSigner: false, isWritable: true },
             { pubkey: ownerTokenAccount, isSigner: false, isWritable: true },
@@ -499,13 +480,8 @@ function App() {
         maxRetries: 5,
       });
 
-      await CONNECTION.confirmTransaction({
-        signature: txId,
-        blockhash,
-        lastValidBlockHeight,
-      }, 'confirmed');
-
-      setStatus(`Compra realizada! Tx: ${txId}`);
+      await CONNECTION.confirmTransaction({ signature: txId, blockhash, lastValidBlockHeight }, 'confirmed');
+      setStatus(`Compra realizada com sucesso! Tx: ${txId}`);
       await fetchProducts();
       await fetchPurchaseHistory();
       if (activeMenu === 'contract') {
@@ -517,8 +493,12 @@ function App() {
       if (error instanceof SendTransactionError) {
         const logs = await error.getLogs(CONNECTION);
         console.log('Transaction Logs:', logs);
+        setStatus(`Erro: Falha na transação. Verifique o saldo ou estoque. ${error.message}`);
+      } else {
+        setStatus(`Erro: Não foi possível processar a compra. ${error.message}`);
       }
-      setStatus(`Erro: ${error.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -543,54 +523,52 @@ function App() {
     return `${address.slice(0, 6)}...${address.slice(-6)}`;
   };
 
-  const renderProductList = () => {
-    return (
-      <div>
-        <h2 style={{ color: '#333', marginBottom: '10px' }}>Lista de Produtos</h2>
-        {isAccountInitialized && products.length > 0 ? (
-          <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: '#fff', borderRadius: '5px' }}>
-            <thead>
-              <tr style={{ backgroundColor: '#007bff', color: '#fff' }}>
-                <th style={{ padding: '12px' }}>Nome</th>
-                <th style={{ padding: '12px' }}>Descrição</th>
-                <th style={{ padding: '12px' }}>Preço (USDT)</th>
-                <th style={{ padding: '12px' }}>Estoque</th>
-                <th style={{ padding: '12px' }}>Ação</th>
+  const renderProductList = () => (
+    <div>
+      <h2 style={{ color: '#333', marginBottom: '10px' }}>Lista de Produtos</h2>
+      {isAccountInitialized && products.length > 0 ? (
+        <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: '#fff', borderRadius: '5px' }}>
+          <thead>
+            <tr style={{ backgroundColor: '#007bff', color: '#fff' }}>
+              <th style={{ padding: '12px' }}>Nome</th>
+              <th style={{ padding: '12px' }}>Descrição</th>
+              <th style={{ padding: '12px' }}>Preço (USDT)</th>
+              <th style={{ padding: '12px' }}>Estoque</th>
+              <th style={{ padding: '12px' }}>Ação</th>
+            </tr>
+          </thead>
+          <tbody>
+            {products.map(product => (
+              <tr key={product.id} style={{ borderBottom: '1px solid #ddd' }}>
+                <td style={{ padding: '12px' }}>{product.name}</td>
+                <td style={{ padding: '12px' }}>{product.description}</td>
+                <td style={{ padding: '12px' }}>{(product.price / 10 ** 6).toFixed(2)}</td>
+                <td style={{ padding: '12px' }}>{product.stock}</td>
+                <td style={{ padding: '12px' }}>
+                  <input
+                    type="number"
+                    placeholder="Quantidade"
+                    min="1"
+                    value={amounts[product.id] || ''}
+                    onChange={(e) => handleAmountChange(product.id, e.target.value)}
+                    style={{ padding: '5px', marginRight: '5px', width: '80px' }}
+                  />
+                  <button
+                    onClick={() => buyCidacake(product.id)}
+                    style={{ padding: '5px 10px', backgroundColor: '#007bff', color: '#fff', border: 'none', borderRadius: '3px' }}
+                  >
+                    Comprar
+                  </button>
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {products.map(product => (
-                <tr key={product.id} style={{ borderBottom: '1px solid #ddd' }}>
-                  <td style={{ padding: '12px' }}>{product.name}</td>
-                  <td style={{ padding: '12px' }}>{product.description}</td>
-                  <td style={{ padding: '12px' }}>{(product.price / 1000000).toFixed(2)}</td>
-                  <td style={{ padding: '12px' }}>{product.stock}</td>
-                  <td style={{ padding: '12px' }}>
-                    <input
-                      type="number"
-                      placeholder="Quantidade"
-                      min="1"
-                      value={amounts[product.id] || ''}
-                      onChange={(e) => handleAmountChange(product.id, e.target.value)}
-                      style={{ padding: '5px', marginRight: '5px', width: '80px' }}
-                    />
-                    <button
-                      onClick={() => buyCidacake(product.id)}
-                      style={{ padding: '5px 10px', backgroundColor: '#007bff', color: '#fff', border: 'none', borderRadius: '3px' }}
-                    >
-                      Comprar
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        ) : (
-          <p>Conta CAKE_ACCOUNT não está inicializada ou nenhum produto foi cadastrado.</p>
-        )}
-      </div>
-    );
-  };
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <p>Conta CAKE_ACCOUNT não está inicializada ou nenhum produto foi cadastrado.</p>
+      )}
+    </div>
+  );
 
   const renderPurchaseHistory = () => {
     const copyButtonStyle = {
@@ -621,7 +599,7 @@ function App() {
                 <tr key={index} style={{ borderBottom: '1px solid #ddd' }}>
                   <td style={{ padding: '12px' }}>{purchase.productName}</td>
                   <td style={{ padding: '12px' }}>{purchase.quantity}</td>
-                  <td style={{ padding: '12px' }}>{(purchase.totalPrice / 1000000).toFixed(2)}</td>
+                  <td style={{ padding: '12px' }}>{(purchase.totalPrice / 10 ** 6).toFixed(2)}</td>
                   <td style={{ padding: '12px' }}>{purchase.date}</td>
                   <td style={{ padding: '12px', fontSize: '12px' }}>{abbreviateAddress(purchase.buyer)}</td>
                   <td style={{ padding: '12px', fontSize: '12px' }}>
@@ -659,14 +637,6 @@ function App() {
     transition: 'background-color 0.3s',
   };
 
-  const copyButtonStyle = {
-    background: 'none',
-    border: 'none',
-    cursor: 'pointer',
-    padding: '0 5px',
-    verticalAlign: 'middle',
-  };
-
   return (
     <div className="App" style={{ padding: '20px', maxWidth: '800px', margin: '0 auto', fontFamily: 'Arial, sans-serif' }}>
       <h1 style={{ color: '#333', textAlign: 'center', marginBottom: '20px' }}>Cidacake Store</h1>
@@ -678,10 +648,7 @@ function App() {
           <div style={{ display: 'flex', justifyContent: 'center', flexWrap: 'wrap', gap: '10px', marginBottom: '20px' }}>
             <button
               onClick={() => setActiveMenu('products')}
-              style={{
-                ...buttonStyle,
-                backgroundColor: activeMenu === 'products' ? '#0056b3' : '#007bff',
-              }}
+              style={{ ...buttonStyle, backgroundColor: activeMenu === 'products' ? '#0056b3' : '#007bff' }}
               onMouseOver={(e) => (e.target.style.backgroundColor = '#0056b3')}
               onMouseOut={(e) => (e.target.style.backgroundColor = activeMenu === 'products' ? '#0056b3' : '#007bff')}
             >
@@ -689,10 +656,7 @@ function App() {
             </button>
             <button
               onClick={() => setActiveMenu('addProduct')}
-              style={{
-                ...buttonStyle,
-                backgroundColor: activeMenu === 'addProduct' ? '#0056b3' : '#007bff',
-              }}
+              style={{ ...buttonStyle, backgroundColor: activeMenu === 'addProduct' ? '#0056b3' : '#007bff' }}
               onMouseOver={(e) => (e.target.style.backgroundColor = '#0056b3')}
               onMouseOut={(e) => (e.target.style.backgroundColor = activeMenu === 'addProduct' ? '#0056b3' : '#007bff')}
             >
@@ -700,10 +664,7 @@ function App() {
             </button>
             <button
               onClick={() => setActiveMenu('history')}
-              style={{
-                ...buttonStyle,
-                backgroundColor: activeMenu === 'history' ? '#0056b3' : '#007bff',
-              }}
+              style={{ ...buttonStyle, backgroundColor: activeMenu === 'history' ? '#0056b3' : '#007bff' }}
               onMouseOver={(e) => (e.target.style.backgroundColor = '#0056b3')}
               onMouseOut={(e) => (e.target.style.backgroundColor = activeMenu === 'history' ? '#0056b3' : '#007bff')}
             >
@@ -711,10 +672,7 @@ function App() {
             </button>
             <button
               onClick={() => { setActiveMenu('contract'); fetchContractInfo(); }}
-              style={{
-                ...buttonStyle,
-                backgroundColor: activeMenu === 'contract' ? '#0056b3' : '#007bff',
-              }}
+              style={{ ...buttonStyle, backgroundColor: activeMenu === 'contract' ? '#0056b3' : '#007bff' }}
               onMouseOver={(e) => (e.target.style.backgroundColor = '#0056b3')}
               onMouseOut={(e) => (e.target.style.backgroundColor = activeMenu === 'contract' ? '#0056b3' : '#007bff')}
             >
@@ -722,10 +680,7 @@ function App() {
             </button>
             <button
               onClick={disconnectWallet}
-              style={{
-                ...buttonStyle,
-                backgroundColor: '#dc3545',
-              }}
+              style={{ ...buttonStyle, backgroundColor: '#dc3545' }}
               onMouseOver={(e) => (e.target.style.backgroundColor = '#c82333')}
               onMouseOut={(e) => (e.target.style.backgroundColor = '#dc3545')}
             >
@@ -733,6 +688,7 @@ function App() {
             </button>
           </div>
           <div style={{ marginTop: '20px' }}>
+            {isLoading && <div style={{ textAlign: 'center', color: '#007bff' }}>Carregando...</div>}
             {activeMenu === 'products' && renderProductList()}
             {activeMenu === 'addProduct' && (
               <div>
@@ -740,14 +696,14 @@ function App() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxWidth: '400px', margin: '0 auto' }}>
                   <input
                     type="text"
-                    placeholder="Nome do Bolo"
+                    placeholder="Nome do Bolo (máx 32 caracteres)"
                     value={newProduct.name}
                     onChange={(e) => setNewProduct({ ...newProduct, name: e.target.value })}
                     style={{ padding: '10px', border: '1px solid #ccc', borderRadius: '5px' }}
                   />
                   <input
                     type="text"
-                    placeholder="Descrição"
+                    placeholder="Descrição (máx 128 caracteres)"
                     value={newProduct.description}
                     onChange={(e) => setNewProduct({ ...newProduct, description: e.target.value })}
                     style={{ padding: '10px', border: '1px solid #ccc', borderRadius: '5px' }}
@@ -786,8 +742,6 @@ function App() {
                 <h3 style={{ color: '#333', marginBottom: '20px', fontSize: '24px', borderBottom: '2px solid #007bff', paddingBottom: '5px' }}>
                   Informações Detalhadas do Contrato Cidacake
                 </h3>
-
-                {/* Programa */}
                 <div style={{ marginBottom: '20px' }}>
                   <h4 style={{ color: '#007bff', fontSize: '18px', marginBottom: '10px' }}>Programa</h4>
                   <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: '#fff', borderRadius: '5px' }}>
@@ -804,8 +758,6 @@ function App() {
                     </tbody>
                   </table>
                 </div>
-
-                {/* Conta de Estoque */}
                 <div style={{ marginBottom: '20px' }}>
                   <h4 style={{ color: '#007bff', fontSize: '18px', marginBottom: '10px' }}>Conta de Estoque</h4>
                   <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: '#fff', borderRadius: '5px' }}>
@@ -826,8 +778,6 @@ function App() {
                     </tbody>
                   </table>
                 </div>
-
-                {/* Proprietário */}
                 <div style={{ marginBottom: '20px' }}>
                   <h4 style={{ color: '#007bff', fontSize: '18px', marginBottom: '10px' }}>Proprietário</h4>
                   <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: '#fff', borderRadius: '5px' }}>
@@ -846,8 +796,6 @@ function App() {
                     </tbody>
                   </table>
                 </div>
-
-                {/* Comprador */}
                 <div style={{ marginBottom: '20px' }}>
                   <h4 style={{ color: '#007bff', fontSize: '18px', marginBottom: '10px' }}>Conta de Token do Comprador</h4>
                   <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: '#fff', borderRadius: '5px' }}>
@@ -863,8 +811,6 @@ function App() {
                     </tbody>
                   </table>
                 </div>
-
-                {/* Produtos */}
                 <div style={{ marginBottom: '20px' }}>
                   <h4 style={{ color: '#007bff', fontSize: '18px', marginBottom: '10px' }}>Produtos Registrados</h4>
                   {contractInfo.products.length > 0 ? (
@@ -884,7 +830,7 @@ function App() {
                             <td style={{ padding: '12px' }}>{product.id}</td>
                             <td style={{ padding: '12px' }}>{product.name}</td>
                             <td style={{ padding: '12px' }}>{product.description}</td>
-                            <td style={{ padding: '12px' }}>{product.price.toFixed(2)}</td>
+                            <td style={{ padding: '12px' }}>{(product.price / 10 ** 6).toFixed(2)}</td>
                             <td style={{ padding: '12px' }}>{product.stock}</td>
                           </tr>
                         ))}
@@ -894,8 +840,6 @@ function App() {
                     <p>Nenhum produto registrado.</p>
                   )}
                 </div>
-
-                {/* Última Compra */}
                 {contractInfo.lastPurchase && (
                   <div style={{ marginBottom: '20px' }}>
                     <h4 style={{ color: '#007bff', fontSize: '18px', marginBottom: '10px' }}>Última Compra</h4>
@@ -916,7 +860,6 @@ function App() {
                     </table>
                   </div>
                 )}
-
                 <button
                   onClick={() => setShowContractInfo(false)}
                   style={{ ...buttonStyle, marginTop: '20px' }}
