@@ -315,54 +315,109 @@ function App() {
 
   const fetchContractInfo = async () => {
     try {
-      setStatus('Obtendo informações do contrato...');
-      const cakeAccountInfo = await CONNECTION.getAccountInfo(CAKE_ACCOUNT);
-      const cakeAccountBalance = cakeAccountInfo ? (cakeAccountInfo.lamports / LAMPORTS_PER_SOL).toFixed(4) : 'N/A';
-      const cakeAccountSpace = cakeAccountInfo ? cakeAccountInfo.space : 'N/A';
-      const cakeAccountRentEpoch = cakeAccountInfo ? cakeAccountInfo.rentEpoch : 'N/A';
-      const cakeAccountExecutable = cakeAccountInfo ? cakeAccountInfo.executable : 'N/A';
+      setStatus('Obtendo informações detalhadas do contrato...');
 
+      // Informações básicas da CAKE_ACCOUNT
+      const cakeAccountInfo = await CONNECTION.getAccountInfo(CAKE_ACCOUNT);
+      if (!cakeAccountInfo) throw new Error('CAKE_ACCOUNT não encontrada.');
+      const cakeAccountBalance = (cakeAccountInfo.lamports / LAMPORTS_PER_SOL).toFixed(4);
+      const cakeAccountSpace = cakeAccountInfo.space;
+      const cakeAccountRentEpoch = cakeAccountInfo.rentEpoch;
+      const cakeAccountExecutable = cakeAccountInfo.executable;
+
+      // Extrair product_counter e history_counter
+      const productCounter = Number(cakeAccountInfo.data.readBigUInt64LE(32));
+      const historyCounter = Number(cakeAccountInfo.data.readBigUInt64LE(40));
+
+      // Informações do OWNER_PUBKEY
       const ownerAccountInfo = await CONNECTION.getAccountInfo(OWNER_PUBKEY);
       const ownerAccountBalance = ownerAccountInfo ? (ownerAccountInfo.lamports / LAMPORTS_PER_SOL).toFixed(4) : 'N/A';
 
-      const ownerTokenAccountInfo = await CONNECTION.getAccountInfo(OWNER_TOKEN_ACCOUNT);
-      const ownerTokenAccountBalance = ownerTokenAccountInfo ? (ownerTokenAccountInfo.lamports / LAMPORTS_PER_SOL).toFixed(4) : 'N/A';
+      // Informações da OWNER_TOKEN_ACCOUNT (USDT)
+      const ownerTokenAccountInfo = await getAccount(CONNECTION, OWNER_TOKEN_ACCOUNT);
+      const ownerTokenBalance = ownerTokenAccountInfo.amount / 10 ** 6; // Ajustado para USDT (6 decimais)
+      const ownerTokenMint = ownerTokenAccountInfo.mint.toString();
 
-      let tokenInfo = {};
-      try {
-        const tokenAccount = await getAccount(CONNECTION, OWNER_TOKEN_ACCOUNT);
-        tokenInfo = {
-          isTokenAccount: true,
-          mint: tokenAccount.mint.toString(),
-          tokenBalance: tokenAccount.amount.toString(),
-          decimals: tokenAccount.decimals || 'N/A',
-        };
-      } catch (error) {
-        tokenInfo = { isTokenAccount: false, mint: 'N/A', tokenBalance: 'N/A', decimals: 'N/A' };
-      }
+      // Informações da BUYER_TOKEN_ACCOUNT (USDT)
+      const buyerTokenAccount = new PublicKey('5PmmgsYepReKZorTWXQMK6BoE9DbX6TXvcSgx3kUVCVP');
+      const buyerTokenAccountInfo = await getAccount(CONNECTION, buyerTokenAccount);
+      const buyerTokenBalance = buyerTokenAccountInfo.amount / 10 ** 6; // Ajustado para USDT (6 decimais)
 
+      // Informações do PROGRAM_ID
       const programInfo = await CONNECTION.getAccountInfo(PROGRAM_ID);
       const programBalance = programInfo ? (programInfo.lamports / LAMPORTS_PER_SOL).toFixed(4) : 'N/A';
       const programExecutable = programInfo ? programInfo.executable : 'N/A';
 
+      // Lista de produtos
+      const productsList = [];
+      for (let productId = 0; productId < productCounter; productId++) {
+        const [productAccount] = await PublicKey.findProgramAddress(
+          [Buffer.from('product'), Buffer.from(new BigUint64Array([BigInt(productId)]).buffer)],
+          PROGRAM_ID
+        );
+        const productInfo = await CONNECTION.getAccountInfo(productAccount);
+        if (productInfo && productInfo.data) {
+          const id = Number(productInfo.data.readBigUInt64LE(0));
+          const nameBytes = productInfo.data.slice(8, 40);
+          const name = new TextDecoder().decode(nameBytes).replace(/\0/g, '');
+          const descriptionBytes = productInfo.data.slice(40, 168);
+          const description = new TextDecoder().decode(descriptionBytes).replace(/\0/g, '');
+          const price = Number(productInfo.data.readBigUInt64LE(168)) / 10 ** 6; // Ajustado para USDT
+          const stock = Number(productInfo.data.readBigUInt64LE(176));
+          productsList.push({ id, name, description, price, stock });
+        }
+      }
+
+      // Última compra (se existir)
+      let lastPurchase = null;
+      if (historyCounter > 0) {
+        const programAccounts = await CONNECTION.getProgramAccounts(PROGRAM_ID, {
+          filters: [{ dataSize: PurchaseHistory.LEN }],
+        });
+        if (programAccounts.length > 0) {
+          const latestAccount = programAccounts.sort((a, b) => {
+            const aTimestamp = Number(a.account.data.readBigInt64LE(49));
+            const bTimestamp = Number(b.account.data.readBigInt64LE(49));
+            return bTimestamp - aTimestamp;
+          })[0];
+          const purchase = PurchaseHistory.unpack_from_slice(latestAccount.account.data);
+          const product = productsList.find(p => p.id === purchase.product_id) || { name: `Produto ${purchase.product_id}` };
+          lastPurchase = {
+            productName: product.name,
+            quantity: purchase.quantity.toString(),
+            totalPrice: (purchase.total_price / 10 ** 6).toFixed(2),
+            buyer: purchase.buyer.toString(),
+            timestamp: new Date(Number(purchase.timestamp) * 1000).toLocaleString(),
+          };
+        }
+      }
+
+      // Montar objeto com todas as informações
       const info = {
         programId: PROGRAM_ID.toString(),
         cakeAccount: CAKE_ACCOUNT.toString(),
         ownerPubkey: OWNER_PUBKEY.toString(),
         ownerTokenAccount: OWNER_TOKEN_ACCOUNT.toString(),
+        buyerTokenAccount: buyerTokenAccount.toString(),
         cakeAccountBalance,
         cakeAccountSpace,
         cakeAccountRentEpoch,
         cakeAccountExecutable,
+        productCounter,
+        historyCounter,
         ownerAccountBalance,
-        ownerTokenAccountBalance,
-        tokenInfo,
+        ownerTokenBalance: ownerTokenBalance.toFixed(2),
+        ownerTokenMint,
+        buyerTokenBalance: buyerTokenBalance.toFixed(2),
         programBalance,
         programExecutable,
+        products: productsList,
+        lastPurchase,
       };
+
       setContractInfo(info);
       setShowContractInfo(true);
-      setStatus('Informações do contrato obtidas com sucesso!');
+      setStatus('Informações detalhadas do contrato obtidas com sucesso!');
     } catch (error) {
       console.error('Erro ao obter informações do contrato:', error);
       setStatus(`Erro ao obter informações do contrato: ${error.message}`);
@@ -729,128 +784,139 @@ function App() {
             {activeMenu === 'contract' && showContractInfo && contractInfo && (
               <div style={{ marginTop: '20px', padding: '20px', backgroundColor: '#f9f9f9', borderRadius: '10px', boxShadow: '0 4px 8px rgba(0, 0, 0, 0.1)' }}>
                 <h3 style={{ color: '#333', marginBottom: '20px', fontSize: '24px', borderBottom: '2px solid #007bff', paddingBottom: '5px' }}>
-                  Informações do Contrato Cidacake
+                  Informações Detalhadas do Contrato Cidacake
                 </h3>
+
+                {/* Programa */}
                 <div style={{ marginBottom: '20px' }}>
                   <h4 style={{ color: '#007bff', fontSize: '18px', marginBottom: '10px' }}>Programa</h4>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: '#fff', borderRadius: '5px', overflow: 'hidden' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: '#fff', borderRadius: '5px' }}>
                     <thead>
                       <tr style={{ backgroundColor: '#007bff', color: '#fff' }}>
-                        <th style={{ padding: '12px', textAlign: 'left', fontWeight: 'bold' }}>Campo</th>
-                        <th style={{ padding: '12px', textAlign: 'left', fontWeight: 'bold' }}>Valor</th>
+                        <th style={{ padding: '12px', textAlign: 'left' }}>Campo</th>
+                        <th style={{ padding: '12px', textAlign: 'left' }}>Valor</th>
                       </tr>
                     </thead>
                     <tbody>
-                      <tr style={{ borderBottom: '1px solid #ddd' }}>
-                        <td style={{ padding: '12px', color: '#555' }}>ID do Programa</td>
-                        <td style={{ padding: '12px', color: '#333', fontFamily: 'monospace' }}>{contractInfo.programId}</td>
-                      </tr>
-                      <tr style={{ borderBottom: '1px solid #ddd' }}>
-                        <td style={{ padding: '12px', color: '#555' }}>Saldo do Programa (SOL)</td>
-                        <td style={{ padding: '12px', color: '#333' }}>{contractInfo.programBalance}</td>
-                      </tr>
-                      <tr style={{ borderBottom: '1px solid #ddd' }}>
-                        <td style={{ padding: '12px', color: '#555' }}>Programa Executável</td>
-                        <td style={{ padding: '12px', color: '#333' }}>{contractInfo.programExecutable.toString()}</td>
-                      </tr>
+                      <tr><td style={{ padding: '12px' }}>ID do Programa</td><td style={{ padding: '12px', fontFamily: 'monospace' }}>{contractInfo.programId}</td></tr>
+                      <tr><td style={{ padding: '12px' }}>Saldo (SOL)</td><td style={{ padding: '12px' }}>{contractInfo.programBalance}</td></tr>
+                      <tr><td style={{ padding: '12px' }}>Executável</td><td style={{ padding: '12px' }}>{contractInfo.programExecutable.toString()}</td></tr>
                     </tbody>
                   </table>
                 </div>
+
+                {/* Conta de Estoque */}
                 <div style={{ marginBottom: '20px' }}>
                   <h4 style={{ color: '#007bff', fontSize: '18px', marginBottom: '10px' }}>Conta de Estoque</h4>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: '#fff', borderRadius: '5px', overflow: 'hidden' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: '#fff', borderRadius: '5px' }}>
                     <thead>
                       <tr style={{ backgroundColor: '#007bff', color: '#fff' }}>
-                        <th style={{ padding: '12px', textAlign: 'left', fontWeight: 'bold' }}>Campo</th>
-                        <th style={{ padding: '12px', textAlign: 'left', fontWeight: 'bold' }}>Valor</th>
+                        <th style={{ padding: '12px', textAlign: 'left' }}>Campo</th>
+                        <th style={{ padding: '12px', textAlign: 'left' }}>Valor</th>
                       </tr>
                     </thead>
                     <tbody>
-                      <tr style={{ borderBottom: '1px solid #ddd' }}>
-                        <td style={{ padding: '12px', color: '#555' }}>Conta de Estoque (CAKE_ACCOUNT)</td>
-                        <td style={{ padding: '12px', color: '#333', fontFamily: 'monospace' }}>{contractInfo.cakeAccount}</td>
-                      </tr>
-                      <tr style={{ borderBottom: '1px solid #ddd' }}>
-                        <td style={{ padding: '12px', color: '#555' }}>Saldo da Conta de Estoque (SOL)</td>
-                        <td style={{ padding: '12px', color: '#333' }}>{contractInfo.cakeAccountBalance}</td>
-                      </tr>
-                      <tr style={{ borderBottom: '1px solid #ddd' }}>
-                        <td style={{ padding: '12px', color: '#555' }}>Espaço Alocado (Bytes)</td>
-                        <td style={{ padding: '12px', color: '#333' }}>{contractInfo.cakeAccountSpace}</td>
-                      </tr>
-                      <tr style={{ borderBottom: '1px solid #ddd' }}>
-                        <td style={{ padding: '12px', color: '#555' }}>Época de Aluguel (Rent Epoch)</td>
-                        <td style={{ padding: '12px', color: '#333' }}>{contractInfo.cakeAccountRentEpoch}</td>
-                      </tr>
-                      <tr style={{ borderBottom: '1px solid #ddd' }}>
-                        <td style={{ padding: '12px', color: '#555' }}>Conta de Estoque Executável</td>
-                        <td style={{ padding: '12px', color: '#333' }}>{contractInfo.cakeAccountExecutable.toString()}</td>
-                      </tr>
+                      <tr><td style={{ padding: '12px' }}>Endereço</td><td style={{ padding: '12px', fontFamily: 'monospace' }}>{contractInfo.cakeAccount}</td></tr>
+                      <tr><td style={{ padding: '12px' }}>Saldo (SOL)</td><td style={{ padding: '12px' }}>{contractInfo.cakeAccountBalance}</td></tr>
+                      <tr><td style={{ padding: '12px' }}>Espaço (Bytes)</td><td style={{ padding: '12px' }}>{contractInfo.cakeAccountSpace}</td></tr>
+                      <tr><td style={{ padding: '12px' }}>Época de Aluguel</td><td style={{ padding: '12px' }}>{contractInfo.cakeAccountRentEpoch}</td></tr>
+                      <tr><td style={{ padding: '12px' }}>Executável</td><td style={{ padding: '12px' }}>{contractInfo.cakeAccountExecutable.toString()}</td></tr>
+                      <tr><td style={{ padding: '12px' }}>Total de Produtos</td><td style={{ padding: '12px' }}>{contractInfo.productCounter}</td></tr>
+                      <tr><td style={{ padding: '12px' }}>Total de Compras</td><td style={{ padding: '12px' }}>{contractInfo.historyCounter}</td></tr>
                     </tbody>
                   </table>
                 </div>
+
+                {/* Proprietário */}
                 <div style={{ marginBottom: '20px' }}>
                   <h4 style={{ color: '#007bff', fontSize: '18px', marginBottom: '10px' }}>Proprietário</h4>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: '#fff', borderRadius: '5px', overflow: 'hidden' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: '#fff', borderRadius: '5px' }}>
                     <thead>
                       <tr style={{ backgroundColor: '#007bff', color: '#fff' }}>
-                        <th style={{ padding: '12px', textAlign: 'left', fontWeight: 'bold' }}>Campo</th>
-                        <th style={{ padding: '12px', textAlign: 'left', fontWeight: 'bold' }}>Valor</th>
+                        <th style={{ padding: '12px', textAlign: 'left' }}>Campo</th>
+                        <th style={{ padding: '12px', textAlign: 'left' }}>Valor</th>
                       </tr>
                     </thead>
                     <tbody>
-                      <tr style={{ borderBottom: '1px solid #ddd' }}>
-                        <td style={{ padding: '12px', color: '#555' }}>Conta do Proprietário (OWNER_PUBKEY)</td>
-                        <td style={{ padding: '12px', color: '#333', fontFamily: 'monospace' }}>{contractInfo.ownerPubkey}</td>
-                      </tr>
-                      <tr style={{ borderBottom: '1px solid #ddd' }}>
-                        <td style={{ padding: '12px', color: '#555' }}>Saldo da Conta do Proprietário (SOL)</td>
-                        <td style={{ padding: '12px', color: '#333' }}>{contractInfo.ownerAccountBalance}</td>
-                      </tr>
+                      <tr><td style={{ padding: '12px' }}>Endereço</td><td style={{ padding: '12px', fontFamily: 'monospace' }}>{contractInfo.ownerPubkey}</td></tr>
+                      <tr><td style={{ padding: '12px' }}>Saldo (SOL)</td><td style={{ padding: '12px' }}>{contractInfo.ownerAccountBalance}</td></tr>
+                      <tr><td style={{ padding: '12px' }}>Conta de Token</td><td style={{ padding: '12px', fontFamily: 'monospace' }}>{contractInfo.ownerTokenAccount}</td></tr>
+                      <tr><td style={{ padding: '12px' }}>Saldo de USDT</td><td style={{ padding: '12px' }}>{contractInfo.ownerTokenBalance} USDT</td></tr>
+                      <tr><td style={{ padding: '12px' }}>Mint do Token</td><td style={{ padding: '12px', fontFamily: 'monospace' }}>{contractInfo.ownerTokenMint}</td></tr>
                     </tbody>
                   </table>
                 </div>
+
+                {/* Comprador */}
                 <div style={{ marginBottom: '20px' }}>
-                  <h4 style={{ color: '#007bff', fontSize: '18px', marginBottom: '10px' }}>Conta de Pagamentos</h4>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: '#fff', borderRadius: '5px', overflow: 'hidden' }}>
+                  <h4 style={{ color: '#007bff', fontSize: '18px', marginBottom: '10px' }}>Conta de Token do Comprador</h4>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: '#fff', borderRadius: '5px' }}>
                     <thead>
                       <tr style={{ backgroundColor: '#007bff', color: '#fff' }}>
-                        <th style={{ padding: '12px', textAlign: 'left', fontWeight: 'bold' }}>Campo</th>
-                        <th style={{ padding: '12px', textAlign: 'left', fontWeight: 'bold' }}>Valor</th>
+                        <th style={{ padding: '12px', textAlign: 'left' }}>Campo</th>
+                        <th style={{ padding: '12px', textAlign: 'left' }}>Valor</th>
                       </tr>
                     </thead>
                     <tbody>
-                      <tr style={{ borderBottom: '1px solid #ddd' }}>
-                        <td style={{ padding: '12px', color: '#555' }}>Conta de Pagamentos (OWNER_TOKEN_ACCOUNT)</td>
-                        <td style={{ padding: '12px', color: '#333', fontFamily: 'monospace' }}>{contractInfo.ownerTokenAccount}</td>
-                      </tr>
-                      <tr style={{ borderBottom: '1px solid #ddd' }}>
-                        <td style={{ padding: '12px', color: '#555' }}>Saldo da Conta de Pagamentos (SOL)</td>
-                        <td style={{ padding: '12px', color: '#333' }}>{contractInfo.ownerTokenAccountBalance}</td>
-                      </tr>
-                      <tr style={{ borderBottom: '1px solid #ddd' }}>
-                        <td style={{ padding: '12px', color: '#555' }}>É uma Conta de Token SPL?</td>
-                        <td style={{ padding: '12px', color: '#333' }}>{contractInfo.tokenInfo.isTokenAccount ? 'Sim' : 'Não'}</td>
-                      </tr>
-                      {contractInfo.tokenInfo.isTokenAccount && (
-                        <>
-                          <tr style={{ borderBottom: '1px solid #ddd' }}>
-                            <td style={{ padding: '12px', color: '#555' }}>Endereço do Token (Mint)</td>
-                            <td style={{ padding: '12px', color: '#333', fontFamily: 'monospace' }}>{contractInfo.tokenInfo.mint}</td>
-                          </tr>
-                          <tr style={{ borderBottom: '1px solid #ddd' }}>
-                            <td style={{ padding: '12px', color: '#555' }}>Saldo de Tokens</td>
-                            <td style={{ padding: '12px', color: '#333' }}>{contractInfo.tokenInfo.tokenBalance}</td>
-                          </tr>
-                          <tr style={{ borderBottom: '1px solid #ddd' }}>
-                            <td style={{ padding: '12px', color: '#555' }}>Decimais do Token</td>
-                            <td style={{ padding: '12px', color: '#333' }}>{contractInfo.tokenInfo.decimals}</td>
-                          </tr>
-                        </>
-                      )}
+                      <tr><td style={{ padding: '12px' }}>Endereço</td><td style={{ padding: '12px', fontFamily: 'monospace' }}>{contractInfo.buyerTokenAccount}</td></tr>
+                      <tr><td style={{ padding: '12px' }}>Saldo de USDT</td><td style={{ padding: '12px' }}>{contractInfo.buyerTokenBalance} USDT</td></tr>
                     </tbody>
                   </table>
                 </div>
+
+                {/* Produtos */}
+                <div style={{ marginBottom: '20px' }}>
+                  <h4 style={{ color: '#007bff', fontSize: '18px', marginBottom: '10px' }}>Produtos Registrados</h4>
+                  {contractInfo.products.length > 0 ? (
+                    <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: '#fff', borderRadius: '5px' }}>
+                      <thead>
+                        <tr style={{ backgroundColor: '#007bff', color: '#fff' }}>
+                          <th style={{ padding: '12px', textAlign: 'left' }}>ID</th>
+                          <th style={{ padding: '12px', textAlign: 'left' }}>Nome</th>
+                          <th style={{ padding: '12px', textAlign: 'left' }}>Descrição</th>
+                          <th style={{ padding: '12px', textAlign: 'left' }}>Preço (USDT)</th>
+                          <th style={{ padding: '12px', textAlign: 'left' }}>Estoque</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {contractInfo.products.map(product => (
+                          <tr key={product.id} style={{ borderBottom: '1px solid #ddd' }}>
+                            <td style={{ padding: '12px' }}>{product.id}</td>
+                            <td style={{ padding: '12px' }}>{product.name}</td>
+                            <td style={{ padding: '12px' }}>{product.description}</td>
+                            <td style={{ padding: '12px' }}>{product.price.toFixed(2)}</td>
+                            <td style={{ padding: '12px' }}>{product.stock}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <p>Nenhum produto registrado.</p>
+                  )}
+                </div>
+
+                {/* Última Compra */}
+                {contractInfo.lastPurchase && (
+                  <div style={{ marginBottom: '20px' }}>
+                    <h4 style={{ color: '#007bff', fontSize: '18px', marginBottom: '10px' }}>Última Compra</h4>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: '#fff', borderRadius: '5px' }}>
+                      <thead>
+                        <tr style={{ backgroundColor: '#007bff', color: '#fff' }}>
+                          <th style={{ padding: '12px', textAlign: 'left' }}>Campo</th>
+                          <th style={{ padding: '12px', textAlign: 'left' }}>Valor</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr><td style={{ padding: '12px' }}>Produto</td><td style={{ padding: '12px' }}>{contractInfo.lastPurchase.productName}</td></tr>
+                        <tr><td style={{ padding: '12px' }}>Quantidade</td><td style={{ padding: '12px' }}>{contractInfo.lastPurchase.quantity}</td></tr>
+                        <tr><td style={{ padding: '12px' }}>Preço Total (USDT)</td><td style={{ padding: '12px' }}>{contractInfo.lastPurchase.totalPrice}</td></tr>
+                        <tr><td style={{ padding: '12px' }}>Comprador</td><td style={{ padding: '12px', fontFamily: 'monospace' }}>{abbreviateAddress(contractInfo.lastPurchase.buyer)}</td></tr>
+                        <tr><td style={{ padding: '12px' }}>Data</td><td style={{ padding: '12px' }}>{contractInfo.lastPurchase.timestamp}</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
                 <button
                   onClick={() => setShowContractInfo(false)}
                   style={{ ...buttonStyle, marginTop: '20px' }}
