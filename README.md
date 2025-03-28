@@ -8,10 +8,9 @@ O Cidacake Store permite:
 - **Proprietários**: Adicionar novos produtos (ex.: nome, descrição, preço em USDT, estoque).
 - **Compradores**: Comprar produtos usando USDT, com transações registradas na blockchain.
 - **Usuários**: Visualizar a lista de produtos, histórico de compras e informações detalhadas do contrato.
-![alt text](image-1.png)
-![alt text](image-2.png)
-![alt text](image-3.png)
-![alt text](image-4.png)
+
+<video controls src="Screen Recording 2025-03-28 at 10.37.01.mov" title="Title"></video>
+
 ## Pré-requisitos
 
 Antes de começar, você precisará de:
